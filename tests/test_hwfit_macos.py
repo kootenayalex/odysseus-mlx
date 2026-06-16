@@ -35,13 +35,13 @@ def _fake_sysctl(brand="Apple M2 Pro", memsize_gb=32, wired_mb=None):
     return run
 
 
-def test_mlx_models_hidden_on_metal():
-    """MLX-quantized models can't be served by llama.cpp or Ollama (the only
-    Metal-capable engines Odysseus generates), so they must never be recommended
-    on Apple Silicon — even though the catalog tags them as Apple-only."""
+def test_mlx_models_offered_on_metal():
+    """MLX models are now servable on Apple Silicon via mlx_lm.server (the MLX
+    cookbook backend), so they MUST be recommended on Metal — reversing the old
+    'hide MLX on Metal' rule now that an MLX serve path exists."""
     results = rank_models(_metal_system(), limit=900)
     mlx = [m for m in results if str(m.get("quant", "")).startswith("mlx-")]
-    assert mlx == [], f"MLX models surfaced but cannot be served: {[m['name'] for m in mlx]}"
+    assert mlx, "MLX models should surface on Metal now that the MLX backend exists"
 
 
 def _cuda_system():
@@ -57,17 +57,25 @@ def test_mlx_hidden_on_cuda_backend_unchanged():
     assert mlx == []
 
 
-def test_only_gguf_models_recommended_on_metal():
-    """llama.cpp and Ollama (the only Metal engines) need GGUF. Safetensors-only
-    repos — incl. vLLM-only AWQ/GPTQ/FP8 — can't be served on Metal, so every
-    model recommended on Apple Silicon must ship a servable GGUF."""
+def test_only_gguf_or_mlx_models_recommended_on_metal():
+    """Metal serving engines are llama.cpp/Ollama (GGUF) and mlx_lm.server (MLX).
+    So every model recommended on Apple Silicon must ship a servable GGUF OR be an
+    MLX build — vLLM-only AWQ/GPTQ/FP8 safetensors stay filtered out."""
     catalog = {m["name"]: m for m in get_models()}
+
+    def _is_mlx(name, ranked):
+        m = catalog.get(name, {})
+        return (str(ranked.get("quant", "")).startswith("mlx-")
+                or str(m.get("quant", "")).startswith("mlx-")
+                or "mlx" in str(m.get("name", "")).lower())
+
     unservable = [
         r["name"] for r in rank_models(_metal_system(), limit=900)
         if not (catalog.get(r["name"], {}).get("is_gguf")
-                or catalog.get(r["name"], {}).get("gguf_sources"))
+                or catalog.get(r["name"], {}).get("gguf_sources")
+                or _is_mlx(r["name"], r))
     ]
-    assert unservable == [], f"{len(unservable)} non-GGUF models on Metal, e.g. {unservable[:3]}"
+    assert unservable == [], f"{len(unservable)} non-GGUF/non-MLX models on Metal, e.g. {unservable[:3]}"
 
 
 def test_qwen_catalog_entries_point_at_verified_gguf_repos():

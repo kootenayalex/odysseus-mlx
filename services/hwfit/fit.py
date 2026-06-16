@@ -591,9 +591,11 @@ def rank_models(system, use_case=None, limit=50, search=None, sort="score", quan
     for m in models:
         native_q = _native_quant(m)
 
-        # MLX needs the mlx_lm runtime, which Odysseus does not generate serve
-        # commands for. Hide it on every backend, including Metal.
-        if native_q.startswith("mlx-") or "mlx" in (m.get("name") or "").lower():
+        # MLX needs the mlx_lm runtime. Odysseus now generates mlx_lm.server serve
+        # commands on Apple Silicon (Metal), so MLX models are servable there. On
+        # every other backend (CUDA/ROCm/CPU/Windows) MLX can't run — stay hidden.
+        is_mlx = native_q.startswith("mlx-") or "mlx" in (m.get("name") or "").lower()
+        if is_mlx and not apple_silicon:
             continue
 
         # ROCm support for vLLM/SGLang quantized safetensors is too brittle to
@@ -621,7 +623,11 @@ def rank_models(system, use_case=None, limit=50, search=None, sort="score", quan
         # which requires GGUF. vLLM/SGLang are explicitly blocked, so AWQ/GPTQ
         # models without a GGUF source are unservable there.
         if (apple_silicon or consumer_amd or is_windows) and not (m.get("is_gguf") or m.get("gguf_sources")):
-            continue
+            # MLX models are servable on Apple Silicon via mlx_lm.server even
+            # without a GGUF; exempt them. (is_mlx is gated to Metal-only above,
+            # so this never re-admits MLX on consumer AMD / Windows.)
+            if not (is_mlx and apple_silicon):
+                continue
 
         # Format filter: AWQ tab -> only AWQ models, FP4 tab -> FP4-family models, etc.
         if filter_native:
