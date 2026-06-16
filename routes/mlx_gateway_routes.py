@@ -24,10 +24,13 @@ the optional gateway key and alias map come from env.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import socket
 import time
 import uuid
+from collections import defaultdict
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -111,11 +114,130 @@ def _base_url(serve) -> str:
     return f"http://{host}:{serve.port}/v1"
 
 
+# ── On-demand auto-serve (absorbs Baton's ensure_loaded) ──────────────────
+# Per-name locks so two concurrent requests for the same model launch it once.
+_autoserve_locks: dict = defaultdict(asyncio.Lock)
+
+
+def _autoserve_config() -> dict:
+    """Map of auto-servable name -> normalized spec dict {repo_id, venv_bin, ctx,
+    priority, pin, trust_remote}. Read from MLX_AUTOSERVE_FILE (data dir, not
+    committed). A bare string value is treated as the repo_id."""
+    from src.constants import MLX_AUTOSERVE_FILE
+
+    try:
+        with open(MLX_AUTOSERVE_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+    out = {}
+    for name, spec in (raw or {}).items():
+        if isinstance(spec, str):
+            spec = {"repo_id": spec}
+        if isinstance(spec, dict) and spec.get("repo_id"):
+            out[name] = spec
+    return out
+
+
+def _pick_free_port(base: int = 8130, span: int = 60) -> int:
+    for port in range(base, base + span):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise HTTPException(status_code=503, detail="no free port for auto-serve")
+
+
+def _build_mlx_cmd(spec: dict, port: int) -> str:
+    venv_bin = spec.get("venv_bin") or os.environ.get("ODYSSEUS_MLX_VENV_BIN", "")
+    binpath = (venv_bin.rstrip("/") + "/mlx_lm.server") if venv_bin else "mlx_lm.server"
+    cmd = f"{binpath} --model {spec['repo_id']} --host 127.0.0.1 --port {port}"
+    if spec.get("trust_remote"):
+        cmd += " --trust-remote-code"
+    return cmd
+
+
+async def _probe_ready(port: int, timeout_s: int = 240) -> bool:
+    url = f"http://127.0.0.1:{port}/v1/models"
+    deadline = time.time() + timeout_s
+    async with httpx.AsyncClient(timeout=5) as client:
+        while time.time() < deadline:
+            try:
+                r = await client.get(url)
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(1.5)
+    return False
+
+
+async def _ensure_served(name: str):
+    """Launch an auto-servable model on a resolve-miss, wait until it's ready,
+    and return its LoadedServe. Returns None if the name isn't auto-servable.
+
+    Reuses the cookbook serve route (internal call) so admission/eviction,
+    tmux launch, endpoint registration, and scheduler bookkeeping all happen
+    exactly as a manual serve would."""
+    from core.constants import internal_api_base
+    from core.middleware import INTERNAL_TOOL_HEADER, INTERNAL_TOOL_TOKEN
+
+    cfg = _autoserve_config()
+    target = _alias_map().get(name, name)
+    spec = cfg.get(name) or cfg.get(target)
+    if not spec:
+        return None
+
+    async with _autoserve_locks[spec["repo_id"]]:
+        # Re-check under the lock: a concurrent request may have served it.
+        for s in _running_serves():
+            if s.repo_id == spec["repo_id"]:
+                return s
+        port = _pick_free_port()
+        body = {"repo_id": spec["repo_id"], "cmd": _build_mlx_cmd(spec, port)}
+        if spec.get("priority") is not None:
+            body["priority"] = int(spec["priority"])
+        if spec.get("pin"):
+            body["pin"] = True
+        if spec.get("ttl_minutes") is not None:
+            body["ttl_minutes"] = int(spec["ttl_minutes"])
+        headers = {INTERNAL_TOOL_HEADER: INTERNAL_TOOL_TOKEN}
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(f"{internal_api_base()}/api/model/serve",
+                                  json=body, headers=headers)
+        if r.status_code >= 400 or not (r.json() or {}).get("ok"):
+            detail = (r.json() or {}).get("error") if r.content else f"HTTP {r.status_code}"
+            raise HTTPException(status_code=503, detail=f"auto-serve failed: {detail}")
+        if not await _probe_ready(port):
+            raise HTTPException(status_code=504, detail=f"auto-served model '{name}' did not become ready")
+        for s in _running_serves():
+            if s.repo_id == spec["repo_id"] and s.port == port:
+                return s
+        # Registry race: the serve is up but its record didn't land — resolve by repo.
+        for s in _running_serves():
+            if s.repo_id == spec["repo_id"]:
+                return s
+        return None
+
+
 def setup_mlx_gateway_routes() -> APIRouter:
     router = APIRouter(prefix="/mlx", tags=["mlx-gateway"])
 
     async def _resolve_and_touch(model: str):
-        serve = _resolve(model)
+        try:
+            serve = _resolve(model)
+        except HTTPException as e:
+            # Not loaded — try on-demand auto-serve (Baton parity). Use the serve
+            # _ensure_served returns directly: re-resolving by an autoserve alias
+            # (e.g. "coder") would 404 since the loaded serve is keyed by repo id.
+            if e.status_code in (404, 503):
+                serve = await _ensure_served(model)
+                if serve is None:
+                    raise
+            else:
+                raise
         try:
             ms.touch_serve(serve.session_id)
         except Exception:

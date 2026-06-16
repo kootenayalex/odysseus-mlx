@@ -5,6 +5,8 @@ proxies to its local port. These cover resolution (alias / repo / short name /
 not-found) and the loopback/Bearer auth, without a live HTTP server.
 """
 
+import socket
+
 import pytest
 from fastapi import HTTPException
 
@@ -115,3 +117,51 @@ def test_nonloopback_with_wrong_bearer(monkeypatch):
     monkeypatch.setenv("ODYSSEUS_MLX_GATEWAY_KEY", "sekret")
     with pytest.raises(HTTPException):
         gw._check_auth(_Req("100.64.0.5"), "Bearer nope")
+
+
+# --- auto-serve helpers --------------------------------------------------- #
+def test_autoserve_config_normalizes(monkeypatch, tmp_path):
+    import json as _json
+    import src.constants as const
+    f = tmp_path / "mlx_autoserve.json"
+    f.write_text(_json.dumps({
+        "coder": {"repo_id": "mlx-community/Coder-7B-4bit", "pin": True},
+        "chat": "mlx-community/Chat-4bit",          # bare string -> repo_id
+        "bad": {"no_repo": 1},                        # dropped
+    }))
+    monkeypatch.setattr(const, "MLX_AUTOSERVE_FILE", str(f))
+    cfg = gw._autoserve_config()
+    assert cfg["coder"]["repo_id"] == "mlx-community/Coder-7B-4bit"
+    assert cfg["coder"]["pin"] is True
+    assert cfg["chat"]["repo_id"] == "mlx-community/Chat-4bit"
+    assert "bad" not in cfg
+
+
+def test_autoserve_config_missing_file(monkeypatch, tmp_path):
+    import src.constants as const
+    monkeypatch.setattr(const, "MLX_AUTOSERVE_FILE", str(tmp_path / "nope.json"))
+    assert gw._autoserve_config() == {}
+
+
+def test_build_mlx_cmd_with_venv_and_trust():
+    cmd = gw._build_mlx_cmd({"repo_id": "x/y", "venv_bin": "/v/bin", "trust_remote": True}, 8131)
+    assert cmd == "/v/bin/mlx_lm.server --model x/y --host 127.0.0.1 --port 8131 --trust-remote-code"
+
+
+def test_build_mlx_cmd_bare_binary(monkeypatch):
+    monkeypatch.delenv("ODYSSEUS_MLX_VENV_BIN", raising=False)
+    cmd = gw._build_mlx_cmd({"repo_id": "x/y"}, 8000)
+    assert cmd == "mlx_lm.server --model x/y --host 127.0.0.1 --port 8000"
+
+
+def test_build_mlx_cmd_env_venv(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_MLX_VENV_BIN", "/env/bin")
+    cmd = gw._build_mlx_cmd({"repo_id": "x/y"}, 8000)
+    assert cmd.startswith("/env/bin/mlx_lm.server ")
+
+
+def test_pick_free_port_returns_bindable():
+    port = gw._pick_free_port()
+    # Should be bindable right now (nothing holding it).
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", port))
