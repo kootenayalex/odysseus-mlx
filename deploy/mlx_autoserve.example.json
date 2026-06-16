@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy to <ODYSSEUS_DATA_DIR>/mlx_autoserve.json. Maps a gateway model name to an MLX model the gateway will auto-serve (via mlx_lm.server) on first request. 'venv_bin' is the bin/ dir of a venv with mlx-lm installed; omit to use mlx_lm.server from PATH. Optional: ctx, priority (higher survives eviction), pin (bool), trust_remote (bool). A bare string value is treated as the repo_id.",
+  "coder": {
+    "repo_id": "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
+    "venv_bin": "/path/to/odysseus/.venv-mlx/bin",
+    "priority": 7
+  },
+  "chat": "Qwen/Qwen3-14B-MLX-4bit"
+}
