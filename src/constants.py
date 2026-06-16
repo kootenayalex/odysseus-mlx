@@ -31,6 +31,11 @@ CONTACTS_FILE = os.path.join(DATA_DIR, "contacts.json")
 APP_KEY_FILE = os.path.join(DATA_DIR, ".app_key")
 EMBEDDING_ENDPOINT_FILE = os.path.join(DATA_DIR, "embedding_endpoint.json")
 COOKBOOK_STATE_FILE = os.path.join(DATA_DIR, "cookbook_state.json")
+MLX_SCHEDULER_FILE = os.path.join(DATA_DIR, "mlx_scheduler.json")
+# Optional gateway auto-serve config: { "<name>": {"repo_id": "...", "venv_bin": "<dir>",
+# "ctx": <int>, "priority": <int>, "pin": <bool>, "trust_remote": <bool>} } (or a bare
+# repo_id string). Lets the MLX gateway launch a model on first request, like Baton did.
+MLX_AUTOSERVE_FILE = os.path.join(DATA_DIR, "mlx_autoserve.json")
 BG_JOBS_FILE = os.path.join(DATA_DIR, "bg_jobs.json")
 VAULT_FILE = os.path.join(DATA_DIR, "vault.json")
 TIDY_CALENDAR_STATE_FILE = os.path.join(DATA_DIR, "tidy_calendar_state.json")

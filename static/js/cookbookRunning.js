@@ -8,6 +8,7 @@ import uiModule from './ui.js';
 import { _diagnose, _showDiagnosis, _clearDiagnosis } from './cookbook-diagnosis.js';
 import { registerMenuDismiss } from './escMenuStack.js';
 import { computeProgressSignal } from './cookbookProgressSignal.js';
+import { mountMlxSchedulerPanel } from './cookbookMlxScheduler.js';
 
 // Human-friendly badge label for a task's internal status. Avoids surfacing
 // the word "error" in the sidebar — a server the user stopped or one that
@@ -1737,6 +1738,9 @@ export function _renderRunningTab() {
   }
 
   const _adminCard = group.querySelector('.admin-card');
+  // MLX scheduler panel: budget bar + per-serve pin/unload. Self-hides when no
+  // MLX serves are loaded, so non-MLX setups never see it.
+  try { mountMlxSchedulerPanel(_adminCard); } catch {}
   function _ensureSection(cls, label, items) {
     let sec = group.querySelector('.' + cls);
     if (!sec) {

@@ -586,6 +586,24 @@ def test_model_serve_normalizes_llama_cpp_python_cache_types_after_validation():
     assert src.index("_validate_serve_cmd(req.cmd)") < src.index("_normalize_llama_cpp_python_cache_types(req.cmd)")
 
 
+def test_validate_serve_cmd_accepts_mlx_lm_server():
+    """Apple Silicon MLX serving: mlx_lm.server is allowlisted, plain-arg form."""
+    cmd = (
+        "mlx_lm.server --model mlx-community/Qwen2.5-Coder-32B-Instruct-3bit "
+        "--host 127.0.0.1 --port 8080 --trust-remote-code"
+    )
+    assert _validate_serve_cmd(cmd) == cmd
+
+
+def test_validate_serve_cmd_accepts_mlx_lm_server_venv_path():
+    """Venv-absolute mlx_lm.server (basename allowlisted) is accepted too."""
+    cmd = (
+        "/opt/venv/bin/mlx_lm.server --model mlx-community/DeepSeek-Coder-V2-Lite-Instruct-6bit "
+        "--host 0.0.0.0 --port 8106"
+    )
+    assert _validate_serve_cmd(cmd) == cmd
+
+
 def test_ollama_serve_defaults_to_loopback_bind():
     assert _ollama_bind_from_cmd("ollama serve") == ("127.0.0.1", "11434")
     assert _ollama_bind_from_cmd("ollama run qwen2.5:0.5b") == ("127.0.0.1", "11434")

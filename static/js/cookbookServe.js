@@ -55,9 +55,29 @@ function _repoLooksGgufLike(model, repo) {
   return !!model?.is_gguf || /^Q[2-8]/.test(q) || /^IQ/.test(q) || q === 'GGUF' || n.includes('gguf');
 }
 
+function _repoLooksMLXLike(model, repo) {
+  const q = String(model?.quant || '').toUpperCase();
+  const n = `${repo || ''} ${model?.repo_id || ''} ${model?.name || ''} ${model?.path || ''}`.toLowerCase();
+  return q.startsWith('MLX') || /\bmlx\b|mlx-|_mlx/i.test(n);
+}
+
 function _serveBackendWarning(model, repo, backend, fields = {}) {
   const awqLike = _repoLooksAwqLike(model, repo);
   const ggufLike = _repoLooksGgufLike(model, repo);
+  const mlxLike = _repoLooksMLXLike(model, repo);
+  // MLX weights are served only by mlx_lm.server; everything else needs non-MLX.
+  if (mlxLike && backend !== 'mlx') {
+    return {
+      title: 'MLX needs the MLX backend',
+      body: 'This looks like an MLX-quantized model (Apple Silicon). Only the MLX backend (mlx_lm.server) can read MLX weights — llama.cpp/Ollama/vLLM cannot. Switch the backend to MLX, or download a GGUF build for llama.cpp/Ollama.',
+    };
+  }
+  if (!mlxLike && backend === 'mlx') {
+    return {
+      title: 'MLX backend needs an MLX model',
+      body: 'The MLX backend serves MLX-format weights (e.g. an mlx-community/* repo). This model is not MLX — choose a GGUF/safetensors backend (llama.cpp/Ollama/vLLM), or pick an MLX quant of this model.',
+    };
+  }
   if (awqLike && (backend === 'llamacpp' || backend === 'ollama')) {
     return {
       title: 'AWQ needs vLLM or SGLang',
@@ -134,7 +154,9 @@ function _backendChoicesForTarget(target) {
     return [['llamacpp','llama.cpp'],['diffusers','Diffusers']];
   }
   return _isMetal()
-    ? [['llamacpp','llama.cpp'],['ollama','Ollama']]
+    // MLX (mlx_lm.server) is the fast native Apple-Silicon path; Diffusers
+    // (diffusion_server.py) is CUDA-only — omit it on Metal.
+    ? [['mlx','MLX'],['llamacpp','llama.cpp'],['ollama','Ollama']]
     : [['vllm','vLLM'],['sglang','SGLang'],['llamacpp','llama.cpp'],['ollama','Ollama'],['diffusers','Diffusers']];
 }
 

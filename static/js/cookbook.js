@@ -364,7 +364,10 @@ export function _detectBackend(model) {
   const isAppleSilicon = ['metal', 'mps', 'apple'].includes(sysBackend);
   const _nm = `${model.repo_id || ''} ${model.path || ''} ${model.name || ''}`.toLowerCase();
   if (/\bmlx\b|mlx-|_mlx/i.test(_nm) || q.startsWith('MLX')) {
-    return { backend: 'unsupported', label: 'Unsupported' };
+    // MLX runs only on Apple Silicon, via mlx_lm.server. Elsewhere it's unservable.
+    return isAppleSilicon
+      ? { backend: 'mlx', label: 'MLX' }
+      : { backend: 'unsupported', label: 'Unsupported' };
   }
   const isAwqLike = /^AWQ|^GPTQ|^NVFP4/.test(q) || ['FP8', 'FP4', 'MXFP4', 'NF4', 'INT4', 'INT8', 'W4A16', 'W8A8', 'W8A16'].includes(q) || /\b(awq|gptq|fp8|fp4|nvfp4|mxfp4|nf4|int4|int8|w4a16|w8a8|w8a16)\b/i.test(_nm);
   const isGgufLike = model.is_gguf || /^Q[2-8]/.test(q) || /^IQ/.test(q) || q === 'GGUF' || _nm.includes('gguf');
@@ -664,6 +667,16 @@ export function _buildServeCmd(f, modelName, backend) {
     if (f.diff_attention_slicing) cmd += ' --attention-slicing';
     if (f.diff_vae_slicing) cmd += ' --vae-slicing';
     if (f.diff_harmonize_gpu) cmd += ` --harmonize-gpu ${f.diff_harmonize_gpu}`;
+  } else if (backend === 'mlx') {
+    // Apple Silicon: serve via mlx-lm's own OpenAI server. mlx_lm.server uses the
+    // default Metal stream, so it's thread-safe across its ThreadingHTTPServer
+    // workers and serves MoE/MLA models (e.g. DeepSeek-V2) that mlx-openai-server
+    // crashes on. Unified memory => no TP / gpu-mem knobs. Binds loopback locally,
+    // 0.0.0.0 only when serving a remote host.
+    const _mlxBin = _venvBin ? `${_venvBin}mlx_lm.server` : 'mlx_lm.server';
+    const bindHost = _envState.remoteHost ? '0.0.0.0' : '127.0.0.1';
+    cmd += `${_mlxBin} --model ${modelName} --host ${bindHost} --port ${f.port || '8080'}`;
+    if (f.trust_remote) cmd += ' --trust-remote-code';
   }
   return cmd;
 }

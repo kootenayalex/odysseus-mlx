@@ -130,6 +130,97 @@ async def _stop_serve(session_id: str, remote_host: str = "", ssh_port: str = ""
         return False
 
 
+async def _delete_endpoint_by_id(endpoint_id: str) -> None:
+    """Drop a model endpoint by id (used when evicting a scheduler-owned MLX
+    serve, where we already know the auto-registered endpoint id)."""
+    if not endpoint_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            await client.delete(
+                f"{internal_api_base()}/api/model-endpoints/{endpoint_id}",
+                headers=_internal_headers(),
+            )
+    except Exception as e:
+        logger.warning(f"cookbook_serve_lifecycle: endpoint delete {endpoint_id} failed: {e}")
+
+
+async def evict_serve(serve, reason: str = "evicted") -> bool:
+    """Stop one MLX serve and forget it: kill its tmux session, delete its
+    auto-registered endpoint, and remove it from the scheduler registry.
+
+    `serve` is a services.mlx_scheduler.LoadedServe. This is the single kill
+    path shared by budget eviction (in the serve route) and idle-TTL reaping
+    (in the loop below), so both stay consistent.
+    """
+    from services import mlx_scheduler as ms
+
+    ok = await _stop_serve(serve.session_id, serve.remote_host or "", serve.ssh_port or "")
+    if serve.endpoint_id:
+        await _delete_endpoint_by_id(serve.endpoint_id)
+    else:
+        # Fall back to host:port matching when we don't have the endpoint id.
+        await _delete_endpoint_for_task({
+            "payload": {"_cmd": f"--port {serve.port}"} if serve.port else {},
+            "remoteHost": serve.remote_host or "",
+        })
+    try:
+        ms.deregister_serve(serve.session_id)
+    except Exception as e:
+        logger.warning(f"cookbook_serve_lifecycle: deregister {serve.session_id} failed: {e}")
+    logger.info(f"cookbook_serve_lifecycle: evicted MLX serve {serve.session_id} ({reason})")
+    return ok
+
+
+async def _session_alive(session_id: str) -> bool:
+    """True if the tmux session still exists locally. Used to reconcile the
+    scheduler registry against serves that died outside our control."""
+    import shlex
+    cmd = f"tmux has-session -t {shlex.quote(session_id)} 2>/dev/null"
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.post(
+                f"{internal_api_base()}/api/shell/exec",
+                json={"command": cmd},
+                headers=_internal_headers(),
+            )
+            if r.status_code >= 400:
+                return True  # don't reap on an inconclusive probe
+            data = r.json() if r.content else {}
+            return data.get("exit_code") in (None, 0)
+    except Exception:
+        return True  # never reap a live serve on a transient probe failure
+
+
+async def _reap_mlx_serves() -> None:
+    """TTL idle-unload + registry reconciliation for scheduler-owned MLX serves.
+
+    Mirrors Baton's _reap_loop: idle non-pinned serves past their TTL are
+    unloaded. Also drops registry entries whose tmux session has already gone
+    away (crash / manual kill) so the budget accounting doesn't leak.
+    """
+    from services import mlx_scheduler as ms
+
+    reg = ms.load_registry()
+    if not reg:
+        return
+    loaded = list(reg.values())
+    # 1) Reconcile: forget remote serves we can't probe is handled lazily; for
+    #    local serves, drop dead sessions so freed memory is reflected.
+    for serve in loaded:
+        if not serve.remote_host and not await _session_alive(serve.session_id):
+            try:
+                ms.deregister_serve(serve.session_id)
+            except Exception:
+                pass
+    # 2) Idle-TTL reap on the reconciled view.
+    reg = ms.load_registry()
+    for sid in ms.expired(list(reg.values())):
+        serve = reg.get(sid)
+        if serve:
+            await evict_serve(serve, reason="ttl")
+
+
 async def _tick() -> None:
     state_path = Path(COOKBOOK_STATE_FILE)
     if not state_path.exists():
@@ -212,4 +303,8 @@ async def cookbook_serve_lifecycle_loop() -> None:
             await _tick()
         except Exception as e:
             logger.warning(f"cookbook_serve_lifecycle tick failed: {e}")
+        try:
+            await _reap_mlx_serves()
+        except Exception as e:
+            logger.warning(f"cookbook_serve_lifecycle mlx reap failed: {e}")
         await asyncio.sleep(60)

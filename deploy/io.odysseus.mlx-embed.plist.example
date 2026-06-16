@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Optional: serve an MLX embedding model so EMBEDDING_URL can point at MLX
+     instead of Ollama. Fill in the absolute paths, copy to
+     ~/Library/LaunchAgents/io.odysseus.mlx-embed.plist, then:
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.odysseus.mlx-embed.plist
+     Then set in your .env:
+       EMBEDDING_URL=http://127.0.0.1:8133/v1/embeddings
+       EMBEDDING_MODEL=embed
+     Retrieval is multi-lane, so existing FastEmbed vectors stay searchable. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.odysseus.mlx-embed</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/path/to/odysseus/.venv-mlx/bin/mlx-openai-server</string>
+        <string>launch</string>
+        <string>--model-path</string>
+        <string>mlx-community/all-MiniLM-L6-v2-4bit</string>
+        <string>--model-type</string>
+        <string>embeddings</string>
+        <string>--served-model-name</string>
+        <string>embed</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8133</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HF_HUB_OFFLINE</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

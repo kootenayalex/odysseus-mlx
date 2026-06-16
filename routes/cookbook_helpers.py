@@ -563,6 +563,7 @@ def _bash_squote(v: str) -> str:
 _SERVE_CMD_ALLOWLIST = {
     "vllm", "llama-server", "llama_server", "llama.cpp", "ollama",
     "python", "python3",
+    "mlx_lm.server",            # Apple Silicon MLX serving (mlx-lm console script)
     "sglang", "lmdeploy",
     "node", "npx",
 }
@@ -878,6 +879,15 @@ class ServeRequest(BaseModel):
     hf_token: str | None = None
     gpus: str | None = None
     platform: str | None = None    # "linux", "termux", or "windows"
+    # MLX scheduler governance (Apple Silicon / mlx_lm.server serves only).
+    # All optional — non-MLX serves and clients that don't set them keep the
+    # prior behaviour. priority: higher survives eviction longer; pin: never
+    # evict/TTL-reap; ttl_minutes: idle unload window (0 = never);
+    # footprint_mb: override the estimated memory cost.
+    priority: int | None = None
+    pin: bool = False
+    ttl_minutes: int | None = None
+    footprint_mb: int | None = None
 
 
 def _parse_serve_phase(snapshot: str, task_type: str = "serve") -> dict:

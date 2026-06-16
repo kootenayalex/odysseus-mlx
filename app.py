@@ -213,7 +213,10 @@ if AUTH_ENABLED:
         "/api/version",
         "/login",
     }
-    AUTH_EXEMPT_PREFIXES = ["/static"]
+    # /mlx is the MLX gateway (OpenAI/Ollama surface for external consumers). It
+    # is exempt from session-cookie auth and enforces its own loopback/Bearer
+    # auth in-handler (see routes/mlx_gateway_routes.py).
+    AUTH_EXEMPT_PREFIXES = ["/static", "/mlx/"]
     # Dynamic paths whose own handler proves identity via a path-embedded
     # secret instead of the session/bearer auth. The route handler at
     # routes/task_routes.py validates the per-task `webhook_token` itself
@@ -705,6 +708,11 @@ app.include_router(setup_shell_routes())
 # Cookbook (model download/serve/cache, cookbook state sync)
 from routes.cookbook_routes import setup_cookbook_routes
 app.include_router(setup_cookbook_routes())
+
+# MLX gateway: one stable OpenAI/Ollama endpoint in front of the cookbook's
+# MLX serves, with Qwen tool-call lifting (absorbs Baton's gateway role).
+from routes.mlx_gateway_routes import setup_mlx_gateway_routes
+app.include_router(setup_mlx_gateway_routes())
 
 from routes.workspace_routes import setup_workspace_routes
 app.include_router(setup_workspace_routes())

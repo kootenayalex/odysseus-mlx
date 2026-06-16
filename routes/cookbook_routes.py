@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from routes.cookbook_output import (
     error_aware_output_tail, classify_dead_download,
     HF_CACHE_COMPLETE_PROBE, HF_CACHE_INCOMPLETE_PROBE,
 )
+from services.mlx_scheduler import is_mlx_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -1204,6 +1206,59 @@ def setup_cookbook_routes() -> APIRouter:
         finally:
             db.close()
 
+    def _mlx_detected_vram_gb() -> float | None:
+        """Detected unified-memory (Metal) budget in GB, or None off Apple Silicon."""
+        try:
+            from services.hwfit import hardware
+            info = hardware._detect_apple_silicon()
+            if info and info.get("gpu_vram_gb"):
+                return float(info["gpu_vram_gb"])
+        except Exception:
+            pass
+        return None
+
+    async def _mlx_admit_and_evict(req: "ServeRequest", session_id: str, remote: str | None):
+        """Budget admission + eviction for an MLX serve (ported from Baton).
+
+        Returns (LoadedServe-to-register-on-success, reject_message-or-None).
+        On `loads_after_evict` the victims are stopped here before returning so
+        the new serve launches into freed memory.
+        """
+        from services import mlx_scheduler as ms
+        from src.cookbook_serve_lifecycle import evict_serve
+
+        footprint = req.footprint_mb or ms.estimate_footprint_mb(req.repo_id)
+        budget = ms.budget_mb(detected_vram_gb=_mlx_detected_vram_gb())
+        loaded = list(ms.load_registry().values())
+        plan = ms.plan_admission(loaded, footprint, budget)
+        if plan["decision"] == "rejected":
+            need_gb = footprint / 1024
+            free_gb = plan.get("max_free_after_evict_mb", plan["free_mb"]) / 1024
+            return None, (
+                f"Not enough GPU memory for this MLX model: needs ~{need_gb:.1f} GB, "
+                f"only ~{free_gb:.1f} GB free even after evicting unpinned models "
+                f"(budget {budget / 1024:.1f} GB). Stop a pinned model or pick a smaller quant."
+            )
+        if plan["decision"] == "loads_after_evict":
+            by_sid = {s.session_id: s for s in loaded}
+            for victim_sid in plan["evict"]:
+                victim = by_sid.get(victim_sid)
+                if victim:
+                    await evict_serve(victim, reason="budget")
+        serve = ms.LoadedServe(
+            session_id=session_id,
+            repo_id=req.repo_id,
+            port=ms.port_from_cmd(req.cmd),
+            footprint_mb=footprint,
+            priority=req.priority if req.priority is not None else ms.DEFAULT_PRIORITY,
+            pinned=bool(req.pin),
+            ttl_seconds=(req.ttl_minutes * 60) if req.ttl_minutes is not None else ms.DEFAULT_TTL_SECONDS,
+            remote_host=remote or "",
+            ssh_port=str(req.ssh_port or ""),
+            status="running",
+        )
+        return serve, None
+
     @router.post("/api/model/serve")
     async def model_serve(request: Request, req: ServeRequest):
         """Launch a model server in a tmux session (or PowerShell background process on Windows).
@@ -1302,6 +1357,17 @@ def setup_cookbook_routes() -> APIRouter:
                 "error": _missing_binary_message("docker", remote or "local server"),
                 "session_id": session_id,
             }
+
+        # ── MLX scheduler: memory-budget admission + eviction ──
+        # Apple Silicon has a fixed unified-memory budget; serving multiple MLX
+        # models without governance OOMs the box. Before launching an MLX serve,
+        # check it fits and evict lower-priority/idle serves to make room
+        # (ported from Baton's supervisor). Non-MLX serves are unaffected.
+        _mlx_serve = None
+        if is_mlx_cmd(req.cmd):
+            _mlx_serve, _mlx_reject = await _mlx_admit_and_evict(req, session_id, remote)
+            if _mlx_reject is not None:
+                return {"ok": False, "error": _mlx_reject, "session_id": session_id}
 
         if is_windows and remote:
             # ── Windows remote: generate .ps1 serve runner ──
@@ -1637,6 +1703,18 @@ def setup_cookbook_routes() -> APIRouter:
                 is_windows=is_windows,
             ))
 
+        # Record the now-launched MLX serve in the scheduler registry so the
+        # budget accounting, idle-TTL reaper, and GUI snapshot can see it.
+        if _mlx_serve is not None:
+            try:
+                from services import mlx_scheduler as ms
+                _mlx_serve.endpoint_id = endpoint_id
+                _mlx_serve.port = _mlx_serve.port or ms.port_from_cmd(req.cmd)
+                _mlx_serve.last_used_ms = int(time.time() * 1000)
+                ms.register_serve(_mlx_serve)
+            except Exception as e:
+                logger.warning(f"mlx_scheduler: failed to register serve {session_id}: {e}")
+
         # Log to assistant
         try:
             from src.assistant_log import log_to_assistant
@@ -1653,6 +1731,43 @@ def setup_cookbook_routes() -> APIRouter:
 
         return {"ok": True, "session_id": session_id, "remote": remote or "local",
                 "endpoint_id": endpoint_id}
+
+    # ── MLX scheduler: budget snapshot + manual load/unload/pin controls ──
+    @router.get("/api/mlx/scheduler")
+    async def mlx_scheduler_snapshot(request: Request):
+        """Budget/used/free + per-serve state for the cookbook GUI (the MLX
+        server controls). Baton's /snapshot, served from the registry."""
+        require_user(request)
+        from services import mlx_scheduler as ms
+        budget = ms.budget_mb(detected_vram_gb=_mlx_detected_vram_gb())
+        return ms.snapshot(list(ms.load_registry().values()), budget)
+
+    class MlxServeRef(BaseModel):
+        session_id: str
+
+    @router.post("/api/mlx/scheduler/unload")
+    async def mlx_scheduler_unload(request: Request, req: MlxServeRef):
+        """Manually stop one scheduler-owned MLX serve (Baton's /unload)."""
+        require_admin(request)
+        from services import mlx_scheduler as ms
+        from src.cookbook_serve_lifecycle import evict_serve
+        serve = ms.load_registry().get(req.session_id)
+        if not serve:
+            return {"ok": False, "error": "unknown session_id"}
+        ok = await evict_serve(serve, reason="manual")
+        return {"ok": ok}
+
+    class MlxPinRef(BaseModel):
+        session_id: str
+        pinned: bool
+
+    @router.post("/api/mlx/scheduler/pin")
+    async def mlx_scheduler_pin(request: Request, req: MlxPinRef):
+        """Pin/unpin an MLX serve so it is exempt from eviction and idle-TTL."""
+        require_admin(request)
+        from services import mlx_scheduler as ms
+        ok = ms.set_pinned(req.session_id, req.pinned)
+        return {"ok": ok}
 
     # ── Server setup (install deps on remote) ──
 
