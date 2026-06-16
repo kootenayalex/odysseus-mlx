@@ -7,6 +7,11 @@
 </p>
 
 <p align="center">
+  <b>This fork adds first-class <a href="https://github.com/ml-explore/mlx">MLX</a> serving on Apple Silicon</b> —
+  the fast native path on M-series Macs. See <a href="#mlx-on-apple-silicon-this-fork">MLX on Apple Silicon</a>.
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> ·
   <a href="docs/setup.md">Setup Guide</a> ·
   <a href="CONTRIBUTING.md">Contributing</a> ·
@@ -48,6 +53,32 @@ Native installs, GPU notes, Windows/macOS instructions, HTTPS, and configuration
 - **Email** — IMAP/SMTP inbox with triage, tags, summaries, reminders, and reply drafts.
 - **Notes, Tasks + Calendar** — reminders, todos, scheduled agent tasks, and CalDAV sync.
 - **Extras** — gallery/image editor, themes, uploads, web search, presets, sessions, and 2FA.
+
+## MLX on Apple Silicon (this fork)
+
+On M-series Macs, MLX is the fastest local-inference path. This fork makes the
+Cookbook a first-class MLX manager and adds a stable gateway in front of it, so
+external tools (OpenCode, etc.) get one endpoint instead of N per-model ports:
+
+- **Cookbook MLX backend** — serve any `mlx-community/*` (or other MLX) model
+  with `mlx_lm.server`, straight from the model browser.
+- **Budget-aware scheduler** — admission + priority/LRU eviction + idle-TTL keep
+  concurrent MLX serves under the unified-memory budget instead of OOMing.
+  Tune with `ODYSSEUS_MLX_BUDGET_MB` (defaults to detected Metal working set).
+  Live budget/pin/unload controls show in the Cookbook's Running tab.
+- **Unified gateway** — one OpenAI- and Ollama-compatible endpoint at
+  `http://<host>:7860/mlx/v1` (and `/mlx/api`), with Qwen-family tool-call
+  lifting and **on-demand auto-serve**: name a model in
+  `data/mlx_autoserve.json` (see [`deploy/mlx_autoserve.example.json`](deploy/mlx_autoserve.example.json))
+  and it launches on first request. Loopback is trusted; remote clients send a
+  Bearer token (`ODYSSEUS_MLX_GATEWAY_KEY`).
+- **MLX embeddings (optional)** — serve an MLX embedding model and point
+  `EMBEDDING_URL` at it; see [`deploy/io.odysseus.mlx-embed.plist.example`](deploy/io.odysseus.mlx-embed.plist.example).
+  Retrieval is multi-lane, so existing vectors stay searchable.
+
+Requires a Python env with [`mlx-lm`](https://github.com/ml-explore/mlx-lm)
+(and `mlx-openai-server` for embeddings). MLX features are inert on non-Apple
+hardware — the rest of Odysseus is unchanged.
 
 ## Demo
 
