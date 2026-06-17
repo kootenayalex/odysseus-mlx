@@ -95,7 +95,12 @@ def _resolve(model: str):
     serves = _running_serves()
     if not serves:
         raise HTTPException(status_code=503, detail="no MLX models are currently loaded")
-    target = _alias_map().get(model, model)
+    # Resolve aliases: explicit ODYSSEUS_MLX_ALIASES first, then autoserve names
+    # (so a picked "coder" maps to its repo id and hits the already-loaded serve).
+    target = _alias_map().get(model)
+    if target is None:
+        _auto = _autoserve_config().get(model)
+        target = _auto["repo_id"] if _auto else model
     by_repo = {s.repo_id: s for s in serves}
     if target in by_repo:
         return by_repo[target]
@@ -222,6 +227,19 @@ async def _ensure_served(name: str):
         return None
 
 
+def _advertised_models() -> list:
+    """Model ids the gateway exposes to clients: every auto-servable name (so the
+    model picker shows them even when nothing is loaded — Baton parity) plus any
+    currently-loaded serve not covered by an autoserve alias. Auto-serve aliases
+    win, so a freshly-launched model still shows under its friendly name."""
+    names = list(_autoserve_config().keys())
+    covered = {spec["repo_id"] for spec in _autoserve_config().values()}
+    for s in _running_serves():
+        if s.repo_id not in covered and s.repo_id not in names:
+            names.append(s.repo_id)
+    return names
+
+
 def setup_mlx_gateway_routes() -> APIRouter:
     router = APIRouter(prefix="/mlx", tags=["mlx-gateway"])
 
@@ -249,8 +267,8 @@ def setup_mlx_gateway_routes() -> APIRouter:
     async def list_models(request: Request, authorization: str = Header(default="")):
         _check_auth(request, authorization)
         return {"object": "list", "data": [
-            {"id": s.repo_id, "object": "model", "owned_by": "odysseus-mlx"}
-            for s in _running_serves()]}
+            {"id": mid, "object": "model", "owned_by": "odysseus-mlx"}
+            for mid in _advertised_models()]}
 
     @router.post("/v1/chat/completions")
     async def chat_completions(request: Request, authorization: str = Header(default="")):
@@ -392,10 +410,9 @@ def setup_mlx_gateway_routes() -> APIRouter:
     async def api_tags(request: Request, authorization: str = Header(default="")):
         _check_auth(request, authorization)
         return {"models": [
-            {"name": s.repo_id, "model": s.repo_id,
-             "size": (s.footprint_mb or 0) * 1_000_000, "digest": "",
+            {"name": mid, "model": mid, "size": 0, "digest": "",
              "modified_at": "2026-01-01T00:00:00Z", "details": {"family": "mlx"}}
-            for s in _running_serves()]}
+            for mid in _advertised_models()]}
 
     @router.get("/api/ps")
     async def api_ps(request: Request, authorization: str = Header(default="")):

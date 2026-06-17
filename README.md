@@ -71,7 +71,10 @@ external tools (OpenCode, etc.) get one endpoint instead of N per-model ports:
   lifting and **on-demand auto-serve**: name a model in
   `data/mlx_autoserve.json` (see [`deploy/mlx_autoserve.example.json`](deploy/mlx_autoserve.example.json))
   and it launches on first request. Loopback is trusted; remote clients send a
-  Bearer token (`ODYSSEUS_MLX_GATEWAY_KEY`).
+  Bearer token (`ODYSSEUS_MLX_GATEWAY_KEY`). To use auto-served models from the
+  built-in chat/model-picker, add a model endpoint pointing at
+  `http://<host>:7860/mlx/v1` (Settings → Endpoints) — the gateway advertises
+  every auto-serve name even before anything is loaded.
 - **MLX embeddings (optional)** — serve an MLX embedding model and point
   `EMBEDDING_URL` at it; see [`deploy/io.odysseus.mlx-embed.plist.example`](deploy/io.odysseus.mlx-embed.plist.example).
   Retrieval is multi-lane, so existing vectors stay searchable.

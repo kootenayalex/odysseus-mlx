@@ -160,6 +160,43 @@ def test_build_mlx_cmd_env_venv(monkeypatch):
     assert cmd.startswith("/env/bin/mlx_lm.server ")
 
 
+def test_advertised_models_includes_autoserve_when_idle(monkeypatch, tmp_path):
+    """The picker must show auto-servable models even when none are loaded
+    (Baton parity) — otherwise a cold gateway reports 'no models'."""
+    import json as _json
+    import src.constants as const
+    f = tmp_path / "mlx_autoserve.json"
+    f.write_text(_json.dumps({"coder": "org/Coder-4bit", "chat": "org/Chat-4bit"}))
+    monkeypatch.setattr(const, "MLX_AUTOSERVE_FILE", str(f))
+    _reg(monkeypatch)  # nothing loaded
+    assert set(gw._advertised_models()) == {"coder", "chat"}
+
+
+def test_advertised_models_adds_loaded_not_in_config(monkeypatch, tmp_path):
+    import json as _json
+    import src.constants as const
+    f = tmp_path / "mlx_autoserve.json"
+    f.write_text(_json.dumps({"coder": "org/Coder-4bit"}))
+    monkeypatch.setattr(const, "MLX_AUTOSERVE_FILE", str(f))
+    # A loaded serve whose repo isn't an autoserve target shows by repo id;
+    # an autoserve repo that's loaded stays under its friendly alias (no dupe).
+    _reg(monkeypatch, _serve("s1", "org/Coder-4bit", 8001), _serve("s2", "org/Adhoc-7B", 8002))
+    adv = gw._advertised_models()
+    assert "coder" in adv and "org/Adhoc-7B" in adv and "org/Coder-4bit" not in adv
+
+
+def test_resolve_via_autoserve_alias_to_loaded(monkeypatch, tmp_path):
+    """A picked autoserve name resolves straight to its already-loaded serve."""
+    import json as _json
+    import src.constants as const
+    f = tmp_path / "mlx_autoserve.json"
+    f.write_text(_json.dumps({"coder": "org/Coder-4bit"}))
+    monkeypatch.setattr(const, "MLX_AUTOSERVE_FILE", str(f))
+    monkeypatch.delenv("ODYSSEUS_MLX_ALIASES", raising=False)
+    _reg(monkeypatch, _serve("s1", "org/Coder-4bit", 8001))
+    assert gw._resolve("coder").port == 8001
+
+
 def test_pick_free_port_returns_bindable():
     port = gw._pick_free_port()
     # Should be bindable right now (nothing holding it).
