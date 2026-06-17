@@ -42,7 +42,16 @@ def _run(cmd):
                 text=True,
             )
         else:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            # Augment PATH with the standard system dirs. Hardware probes call
+            # bare-name tools (sysctl, system_profiler, uname — all in /usr/sbin
+            # or /usr/bin); a service started by launchd/systemd often inherits a
+            # minimal PATH without /usr/sbin, which made Apple-Silicon detection
+            # silently fail and fall back to "cpu_arm" (hiding every MLX/Metal
+            # model). Appending keeps any caller-set PATH authoritative.
+            _env = dict(os.environ)
+            _extra = "/usr/sbin:/sbin:/usr/bin:/bin"
+            _env["PATH"] = (_env.get("PATH", "") + ":" + _extra) if _env.get("PATH") else _extra
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10, env=_env)
         if r.returncode == 0:
             return r.stdout.strip()
     except Exception:

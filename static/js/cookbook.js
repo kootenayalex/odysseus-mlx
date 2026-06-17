@@ -2182,6 +2182,14 @@ function _renderRecipes() {
   // (what category + free text) sit together; the more advanced
   // levers (Engine / Quant / Context) live to the right.
   html += '<input type="text" class="cookbook-field-input hwfit-search" id="hwfit-search" placeholder="Search models..." style="flex:1;" />';
+  // Live HuggingFace search: when on, the Search tab queries HF directly (any
+  // model, not just the curated catalog) and ranks results against this box's
+  // hardware. "MLX only" restricts to MLX builds (Apple Silicon). Results
+  // download + serve through the same row UI as catalog models.
+  html += '<label class="hwfit-hf-toggle" title="Search all of HuggingFace live (not just the curated catalog)" style="display:inline-flex;align-items:center;gap:4px;font-size:11px;white-space:nowrap;opacity:0.85;">';
+  html += '<input type="checkbox" id="hwfit-hf-live" /> HuggingFace</label>';
+  html += '<label class="hwfit-hf-mlx-toggle" title="Restrict the HuggingFace search to MLX builds (Apple Silicon)" style="display:none;align-items:center;gap:4px;font-size:11px;white-space:nowrap;opacity:0.85;">';
+  html += '<input type="checkbox" id="hwfit-hf-mlx" /> MLX only</label>';
   html += '<span class="hwfit-engine-wrap">';
   html += '<select class="cookbook-field-input hwfit-engine" id="hwfit-engine" style="height:28px;" title="Filter by serving engine">';
   html += '<option value="">Engine</option>';

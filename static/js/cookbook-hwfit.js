@@ -423,6 +423,8 @@ function _scanSig() {
     gg: (tc && tc._activeGroup) ? String(tc._activeGroup) : '',
     m: _manualHwParams(),
     d: Array.from(_dismissedHwChips).sort(),
+    hf: document.getElementById('hwfit-hf-live')?.checked ? 1 : 0,
+    hfm: document.getElementById('hwfit-hf-mlx')?.checked ? 1 : 0,
   });
 }
 
@@ -677,7 +679,26 @@ export async function _hwfitFetch(fresh = false) {
       const _fitOnly = (() => { try { return localStorage.getItem('hwfit_fit_only_v1') === '1'; } catch { return false; } })();
       if (_fitOnly) params.set('fit_only', '1');
     }
-    const endpoint = isImageMode ? `/api/hwfit/image-models?${params}` : `/api/hwfit/models?${params}`;
+    // Live HuggingFace search mode: query HF directly (any model, not just the
+    // curated catalog). Response shape matches /models, so the render path below
+    // is unchanged. Reuses the same hardware params so fit is ranked correctly.
+    const _hfLive = !isImageMode && document.getElementById('hwfit-hf-live')?.checked;
+    let endpoint;
+    if (_hfLive) {
+      const hp = new URLSearchParams({ q: search || '', limit: '40', sort: sortBy });
+      if (document.getElementById('hwfit-hf-mlx')?.checked) hp.set('mlx_only', 'true');
+      if (quantPref) hp.set('quant', quantPref);
+      if (fresh) hp.set('fresh', '1');
+      if (remoteHost) {
+        hp.set('host', remoteHost);
+        const _srv = _serverByVal(_envState.remoteServerKey || remoteHost);
+        if (_srv?.port) hp.set('ssh_port', _srv.port);
+        if (_srv?.platform) hp.set('platform', _srv.platform);
+      }
+      endpoint = `/api/hwfit/hf-search?${hp}`;
+    } else {
+      endpoint = isImageMode ? `/api/hwfit/image-models?${params}` : `/api/hwfit/models?${params}`;
+    }
     const res = await fetch(endpoint);
     // A newer scan started while this one was in flight (user switched servers
     // mid-probe) — drop this stale response so it can't clobber the new one.
@@ -696,7 +717,7 @@ export async function _hwfitFetch(fresh = false) {
     }
     let data = await res.json();
     if (_tk !== _hwfitFetchToken) { try { wp.destroy(); } catch {} return; }
-    if (!isImageMode && quantPref && !data.error && Array.isArray(data.models) && data.models.length === 0) {
+    if (!isImageMode && !_hfLive && quantPref && !data.error && Array.isArray(data.models) && data.models.length === 0) {
       const fallbackParams = new URLSearchParams(params);
       fallbackParams.delete('quant');
       const fallbackRes = await fetch(`/api/hwfit/models?${fallbackParams}`);
@@ -1801,6 +1822,15 @@ export function _hwfitInit() {
   if (uc) uc.addEventListener('change', () => _hwfitFetch());
   if (sort) sort.addEventListener('change', () => _hwfitFetch());
   if (qpref) qpref.addEventListener('change', () => _hwfitFetch());
+  // Live HuggingFace search toggle (+ dependent "MLX only").
+  const hfLive = document.getElementById('hwfit-hf-live');
+  const hfMlx = document.getElementById('hwfit-hf-mlx');
+  if (hfLive) hfLive.addEventListener('change', () => {
+    const mlxLabel = document.querySelector('.hwfit-hf-mlx-toggle');
+    if (mlxLabel) mlxLabel.style.display = hfLive.checked ? 'inline-flex' : 'none';
+    _hwfitFetch(true);
+  });
+  if (hfMlx) hfMlx.addEventListener('change', () => _hwfitFetch(true));
   // Engine filter is a pure client-side view filter over the already-fetched
   // list (HF + Ollama merged), so just re-render from cache.
   const engine = document.getElementById('hwfit-engine');

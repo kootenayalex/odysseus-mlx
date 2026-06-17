@@ -164,6 +164,28 @@ def test_apple_silicon_skipped_on_linux(monkeypatch):
     assert hardware._detect_apple_silicon() is None
 
 
+def test_run_augments_path_with_system_sbin(monkeypatch):
+    """Regression: a launchd/systemd service often inherits a PATH without
+    /usr/sbin, so bare-name hardware probes (sysctl, system_profiler) silently
+    failed and detection fell back to cpu_arm — hiding every MLX/Metal model.
+    _run must augment PATH so those tools always resolve."""
+    monkeypatch.setattr(hardware, "_remote_host", None)
+    monkeypatch.setenv("PATH", "/opt/homebrew/bin:/usr/bin:/bin")  # no /usr/sbin
+    captured = {}
+
+    class _R:
+        returncode = 0
+        stdout = "ok"
+
+    def _fake_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return _R()
+
+    monkeypatch.setattr(hardware.subprocess, "run", _fake_run)
+    hardware._run(["sysctl", "-n", "hw.memsize"])
+    assert captured["env"] and "/usr/sbin" in captured["env"]["PATH"]
+
+
 def test_intel_mac_skipped(monkeypatch):
     """Intel Macs have no Metal GPU worth serving LLMs on — fall through to CPU."""
     monkeypatch.setattr(hardware, "_remote_host", None)

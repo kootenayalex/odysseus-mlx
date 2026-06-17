@@ -1,4 +1,5 @@
 import re
+import time
 from copy import deepcopy
 
 from fastapi import APIRouter, HTTPException
@@ -105,6 +106,12 @@ def _apply_manual_hardware(system, manual_mode="", manual_gpu_count="", manual_v
     else:
         system.pop("unified_memory", None)
     return system
+
+
+# Live HF-search results cache: {(query, mlx_only, limit, sort): (ts, entries)}.
+# HF API calls are slow; a short TTL keeps repeat searches/typing snappy.
+_HF_SEARCH_CACHE: dict = {}
+_HF_SEARCH_TTL = 300  # seconds
 
 
 def setup_hwfit_routes():
@@ -233,6 +240,71 @@ def setup_hwfit_routes():
             rank_kwargs.pop("fit_only", None)
         results = rank_models(system, **rank_kwargs)
         return {"system": system, "models": results}
+
+    @router.get("/hf-search")
+    def hf_search(q: str = "", mlx_only: bool = False, limit: int = 40,
+                  host: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False,
+                  quant: str = "", sort: str = "downloads"):
+        """Live HuggingFace search: find models on demand (not just the curated
+        catalog) and rank them against the detected hardware. Normalizes each HF
+        result through the SAME hf_ingest.build_entry the catalog generator uses,
+        so an on-demand result is sized/quant-labelled/backend-detected exactly
+        like a catalog model — including MLX (mlx-community etc.). Results render
+        with the existing row UI (download + serve). Short TTL cache; HF errors
+        degrade to an empty list rather than failing the page."""
+        from services.hwfit.hardware import detect_system
+        from services.hwfit.fit import rank_models
+        from services.hwfit import hf_ingest
+        host, ssh_port = _validate_detection_target(host, ssh_port)
+        q = (q or "").strip()
+        limit = max(1, min(int(limit or 40), 50))
+        if not q and not mlx_only:
+            return {"system": {}, "models": [], "error": "empty query"}
+
+        system = deepcopy(detect_system(host=host, ssh_port=ssh_port, platform=platform, fresh=fresh))
+        if system.get("error"):
+            return {"system": system, "models": [], "error": system["error"]}
+
+        cache_key = (q.lower(), bool(mlx_only), limit, sort)
+        cached = _HF_SEARCH_CACHE.get(cache_key)
+        now = time.time()
+        if cached and now - cached[0] < _HF_SEARCH_TTL:
+            entries = cached[1]
+        else:
+            try:
+                from huggingface_hub import HfApi
+                api = HfApi()
+                # mlx_only -> filter by the `mlx` library tag (the reliable way to
+                # get MLX builds; a free-text "+mlx" with sort=downloads just
+                # surfaces popular base repos). is_mlx_name below is a safety net.
+                # Over-fetch a little so the name filter still leaves a full page.
+                kwargs = dict(search=q or None, full=True, cardData=True, sort=sort)
+                if mlx_only:
+                    kwargs["filter"] = "mlx"
+                    kwargs["limit"] = limit * 3
+                else:
+                    kwargs["limit"] = limit
+                infos = list(api.list_models(**kwargs))
+            except Exception as e:
+                return {"system": system, "models": [], "error": f"HuggingFace search failed: {e}"}
+            entries = []
+            for mi in infos:
+                # Safety net: with mlx_only, also drop anything not MLX by name.
+                if mlx_only and not hf_ingest.is_mlx_name(getattr(mi, "id", "")):
+                    continue
+                try:
+                    e = hf_ingest.build_entry(mi)
+                except Exception:
+                    e = None
+                if e:
+                    entries.append(e)
+                if len(entries) >= limit:
+                    break
+            _HF_SEARCH_CACHE[cache_key] = (now, entries)
+
+        results = rank_models(system, models=entries, limit=limit, search=None,
+                              sort="score", quant=quant or None)
+        return {"system": system, "models": results, "source": "huggingface"}
 
     @router.get("/profiles")
     def get_serve_profiles(model: str = "", host: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False, serve_weights_gb: float = 0.0, serve_quant: str = ""):

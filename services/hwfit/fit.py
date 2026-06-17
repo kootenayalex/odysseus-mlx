@@ -578,15 +578,20 @@ SORT_KEYS = {
 }
 
 
-def rank_models(system, use_case=None, limit=50, search=None, sort="score", quant=None, target_context=None, fit_only=False):
+def rank_models(system, use_case=None, limit=50, search=None, sort="score", quant=None, target_context=None, fit_only=False, models=None):
     """Rank all models against detected hardware. Returns sorted list of fit results.
 
     fit_only: when True, drop rows whose fit_level is "too_tight" (model doesn't
     actually fit on the chosen budget). When False (default), every model is
     shown — sorting by Param means highest-param PERIOD, even ones that won't
     run, so the user can see the truth.
+
+    models: rank this explicit list of catalog-shaped entries instead of the
+    static catalog. The live HF-search route passes normalized HF results here
+    so they get identical fit/size/quant/backend treatment as catalog models.
     """
-    models = get_models()
+    if models is None:
+        models = get_models()
     results = []
 
     # Include image gen models only when explicitly filtered
