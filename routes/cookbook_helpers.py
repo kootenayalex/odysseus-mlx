@@ -469,6 +469,12 @@ def _cached_model_scan_script(model_dirs: list[str] | None = None, add_hf_cache:
         "    # Docker images mount ./data/huggingface at /app/.cache/huggingface.",
         "    # When HOME is /root, expanduser() misses that persisted cache.",
         "    add('/app/.cache/huggingface/hub')",
+        # Odysseus's own download dir (cookbook downloads with a custom dir point
+        # HF_HOME at <repo>/data/huggingface). The server process usually has no
+        # HF_HOME, so the env-based candidates above miss it — add it explicitly
+        # so a model downloaded here always shows up in the scan. (Harmless on
+        # remote/SSH scans: scan_hf() skips it when the dir doesn't exist.)
+        f"    add({str(Path(__file__).resolve().parent.parent / 'data' / 'huggingface' / 'hub')!r})",
         f"    add({add_hf_cache!r})" if add_hf_cache else "",
         "    return candidates",
         "def scan_dir(p):",

@@ -170,6 +170,9 @@ _TIMEOUT_EXEMPT_PREFIXES = (
     "/api/upload",          # large files
     "/api/image",           # diffusion proxies (inpaint/harmonize/upscale/etc.) — own 120s httpx timeout
     "/api/memory/audit",    # retains own 120s LLM inactivity timeout
+    "/mlx/",                # MLX gateway: streaming + on-demand auto-serve cold
+                            #   model-load legitimately exceeds 45s on first use
+                            #   (own httpx/_probe_ready timeouts bound it)
 )
 
 

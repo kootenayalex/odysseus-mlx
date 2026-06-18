@@ -169,6 +169,10 @@ def test_advertised_models_includes_autoserve_when_idle(monkeypatch, tmp_path):
     f.write_text(_json.dumps({"coder": "org/Coder-4bit", "chat": "org/Chat-4bit"}))
     monkeypatch.setattr(const, "MLX_AUTOSERVE_FILE", str(f))
     _reg(monkeypatch)  # nothing loaded
+    # Isolate from the real on-disk HF cache: _advertised_models() now also lists
+    # downloaded MLX chat repos, so without this the assertion picks up whatever
+    # models happen to be cached on the host.
+    monkeypatch.setattr(gw, "_downloaded_mlx_chat_repos", lambda: [])
     assert set(gw._advertised_models()) == {"coder", "chat"}
 
 

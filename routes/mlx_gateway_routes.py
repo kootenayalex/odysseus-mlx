@@ -27,7 +27,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import socket
+import subprocess
+import sys
+import tempfile
 import time
 import uuid
 from collections import defaultdict
@@ -144,6 +148,75 @@ def _autoserve_config() -> dict:
     return out
 
 
+# ── Downloaded MLX models (scan the HF cache, like /api/model/cached) ─────────
+# Repo names that are MLX-quantized but NOT a text-chat LLM — embeddings, TTS,
+# STT, 3D, and vision/VL multimodal. Surfacing these as chat models would error
+# or be useless, so they're excluded from the picker.
+_MLX_NON_CHAT_RE = re.compile(
+    r"embed|bge|minilm|e5-|gte-|"          # embeddings
+    r"voxcpm|cosyvoice|parler|\btts\b|"    # TTS
+    r"whisper|\bstt\b|\basr\b|"            # STT
+    r"triposr|\b3d\b|"                     # 3D
+    r"-vl-|\bvl\b|qwen[\d.]*-?vl",         # vision / VL multimodal
+    re.IGNORECASE,
+)
+_MLX_LIKE_RE = re.compile(r"\bmlx\b|mlx-|-mlx|_mlx", re.IGNORECASE)
+
+# TTL cache: the /api/models background refresher probes /mlx/v1/models on an
+# interval, so re-scanning the disk on every probe is wasteful. ~60s is fresh
+# enough that a just-downloaded model appears within a minute.
+_DL_CACHE_TTL_S = 60.0
+_dl_cache: dict = {"ts": 0.0, "repos": []}
+
+
+def _downloaded_mlx_chat_repos() -> list:
+    """Repo ids of MLX text-chat models present in the HF cache on disk.
+
+    Reuses the same standalone scanner the cookbook's /api/model/cached uses
+    (routes.cookbook_helpers._cached_model_scan_script), then filters to
+    MLX-quantized chat LLMs (excluding GGUF/diffusion/ollama and non-chat
+    modalities). Result is TTL-cached so the background model-refresh loop
+    doesn't shell out on every poll."""
+    now = time.time()
+    if now - _dl_cache["ts"] < _DL_CACHE_TTL_S:
+        return _dl_cache["repos"]
+    repos: list = []
+    try:
+        from routes.cookbook_helpers import _cached_model_scan_script
+
+        src = _cached_model_scan_script([])
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as fh:
+            fh.write(src)
+            scan_py = fh.name
+        try:
+            local_py = sys.executable or "python3"
+            proc = subprocess.run([local_py, scan_py], capture_output=True, text=True, timeout=60)
+            raw = json.loads((proc.stdout or "").strip() or "[]")
+        finally:
+            try:
+                os.unlink(scan_py)
+            except OSError:
+                pass
+        for m in raw:
+            rid = m.get("repo_id") or ""
+            if not rid or m.get("status") == "downloading" or m.get("has_incomplete"):
+                continue
+            if m.get("is_gguf") or m.get("is_diffusion") or m.get("is_ollama"):
+                continue
+            if not _MLX_LIKE_RE.search(rid):
+                continue
+            if _MLX_NON_CHAT_RE.search(rid):
+                continue
+            repos.append(rid)
+    except Exception:
+        # A scan failure must not break the picker — fall back to the last
+        # good list (or empty) so autoserve names still surface.
+        return _dl_cache["repos"]
+    _dl_cache["ts"] = now
+    _dl_cache["repos"] = repos
+    return repos
+
+
 def _pick_free_port(base: int = 8130, span: int = 60) -> int:
     for port in range(base, base + span):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -193,7 +266,17 @@ async def _ensure_served(name: str):
     target = _alias_map().get(name, name)
     spec = cfg.get(name) or cfg.get(target)
     if not spec:
-        return None
+        # Not a configured preset, but if it's an MLX chat model already on disk
+        # synthesize a serve spec so any downloaded model is one click away in
+        # chat. venv_bin: explicit env > a preset's venv_bin (same interpreter
+        # the presets use) > PATH lookup inside _build_mlx_cmd.
+        if target in _downloaded_mlx_chat_repos():
+            venv_bin = os.environ.get("ODYSSEUS_MLX_VENV_BIN", "").strip()
+            if not venv_bin:
+                venv_bin = next((s.get("venv_bin") for s in cfg.values() if s.get("venv_bin")), "")
+            spec = {"repo_id": target, "venv_bin": venv_bin, "priority": 4}
+        else:
+            return None
 
     async with _autoserve_locks[spec["repo_id"]]:
         # Re-check under the lock: a concurrent request may have served it.
@@ -230,13 +313,18 @@ async def _ensure_served(name: str):
 def _advertised_models() -> list:
     """Model ids the gateway exposes to clients: every auto-servable name (so the
     model picker shows them even when nothing is loaded — Baton parity) plus any
-    currently-loaded serve not covered by an autoserve alias. Auto-serve aliases
-    win, so a freshly-launched model still shows under its friendly name."""
+    currently-loaded serve not covered by an autoserve alias, plus every MLX
+    chat model already downloaded to the HF cache (so picking it auto-serves on
+    first use). Auto-serve aliases win, so a freshly-launched model still shows
+    under its friendly name and isn't double-listed under its raw repo id."""
     names = list(_autoserve_config().keys())
     covered = {spec["repo_id"] for spec in _autoserve_config().values()}
     for s in _running_serves():
         if s.repo_id not in covered and s.repo_id not in names:
             names.append(s.repo_id)
+    for repo in _downloaded_mlx_chat_repos():
+        if repo not in covered and repo not in names:
+            names.append(repo)
     return names
 
 

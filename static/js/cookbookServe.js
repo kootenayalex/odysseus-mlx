@@ -303,7 +303,14 @@ function _ggufSearchDirExpr(model, repo) {
 function _rerenderCachedModels() {
   const list = document.getElementById('hwfit-cached-list');
   const tagContainer = document.getElementById('serve-tags');
-  if (!list || !_cachedAllModels.length) return;
+  if (!list) return;
+  if (!_cachedAllModels.length) {
+    // No data to render — show the empty state rather than silently leaving the
+    // panel blank (a re-render triggered with an empty cache used to bail here).
+    list.innerHTML = '<div class="hwfit-loading">No cached models found</div>';
+    if (tagContainer) tagContainer.innerHTML = '';
+    return;
+  }
 
   const allModels = _cachedAllModels;
   const _h = (text) => `<span class="hwfit-hint" title="${text}">?</span>`;
@@ -930,7 +937,17 @@ function _rerenderCachedModels() {
         }
         let cmd = _buildServeCmd(f, serveModel, backend);
         if (f.extra && f.extra.trim()) cmd += ' ' + f.extra.trim();
-        const _ce2 = panel.querySelector('.hwfit-serve-cmd'); _ce2.value = cmd; _ce2.style.height = 'auto'; _ce2.style.height = _ce2.scrollHeight + 'px';
+        const _ce2 = panel.querySelector('.hwfit-serve-cmd');
+        if (!cmd.trim()) {
+          // _buildServeCmd returns '' only when the backend has no command
+          // template — in practice an MLX model still detected as 'unsupported'
+          // because hardware info (_hwfitCache) hasn't loaded yet. Show a hint
+          // rather than a blank box; panel._cmd stays empty so Launch is a no-op.
+          _ce2.value = '# Preparing launch command — detecting hardware. If this persists, reopen the Launch tab.';
+        } else {
+          _ce2.value = cmd;
+        }
+        _ce2.style.height = 'auto'; _ce2.style.height = _ce2.scrollHeight + 'px';
         panel._cmd = cmd;
         panel._host = f.host || '';
         return cmd;
@@ -1997,6 +2014,14 @@ function _rerenderCachedModels() {
         const _rawLaunchCmd = _cmdTextarea ? _cmdTextarea.value : panel._cmd;
         const launchCmd = String(_rawLaunchCmd || '').replace(/\s+/g, ' ').trim();
         if (_cmdTextarea && _cmdTextarea.value !== launchCmd) _cmdTextarea.value = launchCmd;
+        // No real command yet — e.g. the empty-cmd hint placeholder (a "# …"
+        // comment) shown while hardware detection is still loading. Refuse to
+        // launch a comment/blank instead of spawning a no-op tmux session.
+        if (!launchCmd || launchCmd.startsWith('#')) {
+          _restoreLaunchBtn();
+          uiModule.showToast('No launch command yet — hardware is still being detected. Reopen the Launch tab and try again.', 6000);
+          return;
+        }
         const serveState = {};
         panel.querySelectorAll('.hwfit-sf').forEach(el => {
           if (el.type === 'checkbox') serveState[el.dataset.field] = el.checked;

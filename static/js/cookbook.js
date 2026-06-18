@@ -1258,6 +1258,13 @@ function _wireTabEvents(body) {
         _hwfitFetch();
       }
       if (backend === 'Serve') {
+        // The Serve/Launch tab needs hardware info: Apple-Silicon detection
+        // (_isMetal, via _hwfitCache) drives backend selection — an MLX model
+        // serves via mlx_lm.server on Metal but is otherwise mis-detected,
+        // yielding the wrong (or empty) launch command. The Download tab loads
+        // _hwfitCache, but opening straight to Launch leaves it null. Kick the
+        // fetch if it hasn't run so panels built on card-expand detect MLX.
+        if (!_hwfitCache) { try { _hwfitInit(); _hwfitFetch(); } catch {} }
         _fetchCachedModels();
       }
       if (backend === 'Dependencies') {

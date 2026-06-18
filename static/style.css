@@ -15930,6 +15930,16 @@ body:not(.email-doc-split-active) #email-lib-modal.email-lib-fullscreen:not(.mod
     flex: 0 0 auto !important;
     height: auto !important;
   }
+  /* The Launch/Serve cached-model list keeps flex:1 1 0 from the desktop Serve
+     rules. Once .cookbook-body is content-sized (above), that flex child has no
+     definite height to grow into and collapses to 0 — the rows render but sit
+     in a zero-height box (blank area below the filter chips). Size it to its
+     content so the modal-content scroller shows the rows, like every other
+     mobile list here. */
+  #cookbook-modal .hwfit-cached-list,
+  #cookbook-modal .cookbook-group[data-backend-group="Serve"] > .admin-card > .hwfit-cached-list {
+    flex: 0 0 auto !important;
+  }
 }
 #cookbook-modal .hwfit-cached-list {
   flex-shrink: 0;
