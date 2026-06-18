@@ -590,6 +590,10 @@ def rank_models(system, use_case=None, limit=50, search=None, sort="score", quan
     static catalog. The live HF-search route passes normalized HF results here
     so they get identical fit/size/quant/backend treatment as catalog models.
     """
+    # The curated catalog (models is None) is finite and meant to be browsed in
+    # full. The live HF-search path passes an explicit `models` list that IS
+    # genuinely unbounded, so only that one stays capped at `limit` (see below).
+    from_catalog = models is None
     if models is None:
         models = get_models()
     results = []
@@ -742,5 +746,13 @@ def rank_models(system, use_case=None, limit=50, search=None, sort="score", quan
     # ascending → truncate kept the 50 SMALLEST models and "highest VRAM"
     # could never appear, breaking the column-click toggle.
     results.sort(key=sort_fn, reverse=True)
-    results = results[:limit]
+    # Do NOT truncate the curated catalog. A post-sort top-N cut changes WHICH
+    # models are visible per sort: sorting by Param/VRAM surfaces the biggest
+    # (non-fitting) models and pushes every model that actually fits past the
+    # cut, so the fitting rows vanish the moment you sort. Returning the whole
+    # ranked catalog keeps a sort a pure reorder — exactly the "see the truth
+    # instead of a quietly-truncated view" goal stated above. Only the unbounded
+    # HF-search path (explicit `models`) keeps the cap.
+    if not from_catalog:
+        results = results[:limit]
     return results

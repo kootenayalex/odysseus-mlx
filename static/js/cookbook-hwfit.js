@@ -208,7 +208,14 @@ export function _renderGpuToggles(system) {
   if (container._activeCount === undefined) {
     const ramGb = Number(system.total_ram_gb) || 0;
     const vramGb = Number(system.gpu_vram_gb) || 0;
-    if (ramGb > vramGb) {
+    // On Apple Silicon, RAM and VRAM are ONE unified pool and Metal is the only
+    // serving path, so a RAM-only default (count=0) is meaningless here — it
+    // tells the ranker "no GPU" and collapses every model to marginal/too-tight
+    // on the next fetch (the first fetch escapes only because the toggles render
+    // after it). Only discrete-GPU boxes, where a small VRAM pool sits next to
+    // much larger system RAM, should default RAM-first.
+    const unifiedMemory = ['metal', 'mps', 'apple'].includes(String(system.backend || '').toLowerCase());
+    if (!unifiedMemory && ramGb > vramGb) {
       container._activeCount = 0;
     } else if (validCounts.length) {
       container._activeCount = maxGpu;
@@ -674,7 +681,10 @@ export async function _hwfitFetch(fresh = false) {
     if (!hasManualOrDismissed && toggleContainer && toggleContainer._activeGroup) {
       gpuGroupOverride = String(toggleContainer._activeGroup);
     }
-    const params = new URLSearchParams({ limit: '80', sort: sortBy });
+    // The curated catalog is finite and returned in full (the server only caps
+    // the unbounded HF-search path), so a sort just reorders the same set rather
+    // than swapping in a different top-N. The high cap is a defensive bound.
+    const params = new URLSearchParams({ limit: '1000', sort: sortBy });
     if (fresh) params.set('fresh', '1');   // bypass the hardware-scan cache
     if (search) params.set('search', search);
     if (remoteHost) {
