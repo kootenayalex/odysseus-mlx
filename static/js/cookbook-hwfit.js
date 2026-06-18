@@ -483,6 +483,30 @@ function _applyEngineFilter(models) {
   });
 }
 
+// Keep the Engine filter dropdown honest about the detected hardware: only offer
+// engines that _detectBackend can actually return on this platform, so every
+// option matches real rows instead of silently filtering to zero. MLX is
+// Apple-Silicon-only (served via mlx_lm.server); vLLM/SGLang are CUDA/ROCm-only
+// and never match on Metal (Apple-Silicon models route to llama.cpp/mlx/ollama).
+// Called from _hwfitRenderHw so it re-syncs on every paint and server switch.
+function _syncEngineOptions(sys) {
+  const sel = document.getElementById('hwfit-engine');
+  if (!sel) return;
+  const isMetal = ['metal', 'mps', 'apple'].includes(String(sys?.backend || '').toLowerCase());
+  // engine value → whether it can match a row on this hardware
+  const applies = { '': true, llamacpp: true, ollama: true, mlx: isMetal, vllm: !isMetal, sglang: !isMetal };
+  for (const opt of sel.options) {
+    const ok = applies[opt.value] ?? true;
+    opt.hidden = !ok;
+    opt.disabled = !ok;
+  }
+  // If the active selection just became inapplicable (e.g. the cache server
+  // switched from a CUDA box to this Mac while "vLLM" was selected), fall back
+  // to "all engines" so the list never stays stuck showing zero rows. The caller
+  // re-renders the list right after this returns, so the reset takes effect.
+  if (applies[sel.value] === false) sel.value = '';
+}
+
 // Ollama library cache (per-page). Filled lazily on first _hwfitFetch; the raw
 // list is the same shape returned by /api/cookbook/ollama/library, then turned
 // into per-tag hwfit rows so they slot into the main list grid alongside HF
@@ -916,6 +940,10 @@ export function _hwfitRenderHw(el, sys) {
   // Show the hardware row when we have data
   const hwRow = document.getElementById('hwfit-hw-row');
   if (hwRow) hwRow.style.display = 'flex';
+  // Re-sync the Engine filter options to this hardware (adds MLX on Apple
+  // Silicon, drops engines that can't run here). Runs on every paint, so a
+  // server switch flips the available engines along with the model list.
+  _syncEngineOptions(sys);
   const gpuCount = sys.gpu_count || 0;
   // gpu_error = nvidia-smi present but failing (e.g. driver/library version
   // mismatch). Surface it instead of the misleading "No GPU" — plain text
@@ -1827,7 +1855,12 @@ export function _hwfitInit() {
   const hfMlx = document.getElementById('hwfit-hf-mlx');
   if (hfLive) hfLive.addEventListener('change', () => {
     const mlxLabel = document.querySelector('.hwfit-hf-mlx-toggle');
-    if (mlxLabel) mlxLabel.style.display = hfLive.checked ? 'inline-flex' : 'none';
+    // "MLX only" only makes sense on Apple Silicon — MLX builds are unservable
+    // elsewhere. Off-Apple, keep the toggle hidden even with HF-live on, and
+    // clear any stale checked state so it can't silently filter the HF search.
+    const _metal = ['metal', 'mps', 'apple'].includes(String(window._hwfitSystemCache?.backend || '').toLowerCase());
+    if (mlxLabel) mlxLabel.style.display = (hfLive.checked && _metal) ? 'inline-flex' : 'none';
+    if (hfMlx && !_metal) hfMlx.checked = false;
     _hwfitFetch(true);
   });
   if (hfMlx) hfMlx.addEventListener('change', () => _hwfitFetch(true));
