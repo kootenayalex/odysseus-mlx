@@ -570,6 +570,7 @@ _SERVE_CMD_ALLOWLIST = {
     "vllm", "llama-server", "llama_server", "llama.cpp", "ollama",
     "python", "python3",
     "mlx_lm.server",            # Apple Silicon MLX serving (mlx-lm console script)
+    "mlx-openai-server",        # MLX serving for speech/STT (whisper) & embeddings
     "sglang", "lmdeploy",
     "node", "npx",
 }

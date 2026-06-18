@@ -21,6 +21,10 @@ def _serve(sid, mb, *, priority=5, pinned=False, last_used_ms=0, ttl=600, status
 # --- MLX detection -------------------------------------------------------- #
 def test_is_mlx_cmd():
     assert ms.is_mlx_cmd("/venv/bin/mlx_lm.server --model X --port 8080")
+    # mlx-openai-server backs whisper/STT (and embeddings) serves — also MLX.
+    assert ms.is_mlx_cmd(
+        "/venv/bin/mlx-openai-server launch --model-path X --model-type whisper --port 8134"
+    )
     assert not ms.is_mlx_cmd("vllm serve X")
     assert not ms.is_mlx_cmd("llama-server -m x.gguf")
     assert not ms.is_mlx_cmd("")

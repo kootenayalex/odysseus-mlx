@@ -237,6 +237,38 @@ def _build_mlx_cmd(spec: dict, port: int) -> str:
     return cmd
 
 
+# ── Whisper / STT engine ──────────────────────────────────────────────────────
+# mlx_lm.server only serves text/chat; whisper is a speech model, so STT serves
+# launch via mlx-openai-server's whisper handler instead. Same on-demand serve
+# machinery (admission/TTL/eviction, dynamic port) — only the command differs.
+_WHISPER_ALIASES = {"whisper", "whisper-1"}
+
+
+def _is_whisper_name(name: str) -> bool:
+    n = (name or "").lower()
+    return n in _WHISPER_ALIASES or "whisper" in n
+
+
+def _default_whisper_repo() -> str:
+    return os.environ.get("ODYSSEUS_MLX_WHISPER_REPO", "mlx-community/whisper-large-v3-turbo")
+
+
+def _build_whisper_cmd(spec: dict, port: int) -> str:
+    venv_bin = spec.get("venv_bin") or os.environ.get("ODYSSEUS_MLX_VENV_BIN", "")
+    binpath = (venv_bin.rstrip("/") + "/mlx-openai-server") if venv_bin else "mlx-openai-server"
+    served = spec.get("served_name") or "whisper"
+    return (f"{binpath} launch --model-path {spec['repo_id']} "
+            f"--model-type whisper --served-model-name {served} "
+            f"--host 127.0.0.1 --port {port}")
+
+
+def _build_serve_cmd(spec: dict, port: int) -> str:
+    """Dispatch on the spec's engine: whisper → mlx-openai-server, else mlx_lm.server."""
+    if spec.get("engine") == "whisper":
+        return _build_whisper_cmd(spec, port)
+    return _build_mlx_cmd(spec, port)
+
+
 async def _probe_ready(port: int, timeout_s: int = 240) -> bool:
     url = f"http://127.0.0.1:{port}/v1/models"
     deadline = time.time() + timeout_s
@@ -266,14 +298,19 @@ async def _ensure_served(name: str):
     target = _alias_map().get(name, name)
     spec = cfg.get(name) or cfg.get(target)
     if not spec:
-        # Not a configured preset, but if it's an MLX chat model already on disk
-        # synthesize a serve spec so any downloaded model is one click away in
-        # chat. venv_bin: explicit env > a preset's venv_bin (same interpreter
-        # the presets use) > PATH lookup inside _build_mlx_cmd.
-        if target in _downloaded_mlx_chat_repos():
-            venv_bin = os.environ.get("ODYSSEUS_MLX_VENV_BIN", "").strip()
-            if not venv_bin:
-                venv_bin = next((s.get("venv_bin") for s in cfg.values() if s.get("venv_bin")), "")
+        # No configured preset — synthesize one. venv_bin: explicit env > a
+        # preset's venv_bin (same interpreter the presets use) > PATH lookup.
+        venv_bin = os.environ.get("ODYSSEUS_MLX_VENV_BIN", "").strip()
+        if not venv_bin:
+            venv_bin = next((s.get("venv_bin") for s in cfg.values() if s.get("venv_bin")), "")
+        if _is_whisper_name(name) or _is_whisper_name(target):
+            # Built-in STT default so dictation works with zero config; a local
+            # `whisper` autoserve entry (or ODYSSEUS_MLX_WHISPER_REPO) overrides it.
+            repo = target if "/" in target else _default_whisper_repo()
+            spec = {"repo_id": repo, "engine": "whisper", "venv_bin": venv_bin,
+                    "footprint_mb": 1800, "priority": 5}
+        elif target in _downloaded_mlx_chat_repos():
+            # An MLX chat model already on disk: one click away in chat.
             spec = {"repo_id": target, "venv_bin": venv_bin, "priority": 4}
         else:
             return None
@@ -284,9 +321,11 @@ async def _ensure_served(name: str):
             if s.repo_id == spec["repo_id"]:
                 return s
         port = _pick_free_port()
-        body = {"repo_id": spec["repo_id"], "cmd": _build_mlx_cmd(spec, port)}
+        body = {"repo_id": spec["repo_id"], "cmd": _build_serve_cmd(spec, port)}
         if spec.get("priority") is not None:
             body["priority"] = int(spec["priority"])
+        if spec.get("footprint_mb") is not None:
+            body["footprint_mb"] = int(spec["footprint_mb"])
         if spec.get("pin"):
             body["pin"] = True
         if spec.get("ttl_minutes") is not None:
@@ -298,7 +337,10 @@ async def _ensure_served(name: str):
         if r.status_code >= 400 or not (r.json() or {}).get("ok"):
             detail = (r.json() or {}).get("error") if r.content else f"HTTP {r.status_code}"
             raise HTTPException(status_code=503, detail=f"auto-serve failed: {detail}")
-        if not await _probe_ready(port):
+        # Whisper loads a ~1.6 GB model with first-run Metal kernel compilation,
+        # which can take minutes; text models are quicker.
+        ready_timeout = 600 if spec.get("engine") == "whisper" else 240
+        if not await _probe_ready(port, timeout_s=ready_timeout):
             raise HTTPException(status_code=504, detail=f"auto-served model '{name}' did not become ready")
         for s in _running_serves():
             if s.repo_id == spec["repo_id"] and s.port == port:

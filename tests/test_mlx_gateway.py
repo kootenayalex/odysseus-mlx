@@ -160,6 +160,48 @@ def test_build_mlx_cmd_env_venv(monkeypatch):
     assert cmd.startswith("/env/bin/mlx_lm.server ")
 
 
+# --- whisper / STT engine ------------------------------------------------- #
+def test_is_whisper_name():
+    assert gw._is_whisper_name("whisper")
+    assert gw._is_whisper_name("whisper-1")
+    assert gw._is_whisper_name("mlx-community/whisper-large-v3-turbo")
+    assert not gw._is_whisper_name("coder")
+    assert not gw._is_whisper_name("")
+
+
+def test_default_whisper_repo(monkeypatch):
+    monkeypatch.delenv("ODYSSEUS_MLX_WHISPER_REPO", raising=False)
+    assert gw._default_whisper_repo() == "mlx-community/whisper-large-v3-turbo"
+    monkeypatch.setenv("ODYSSEUS_MLX_WHISPER_REPO", "org/whisper-custom")
+    assert gw._default_whisper_repo() == "org/whisper-custom"
+
+
+def test_build_whisper_cmd_with_venv():
+    cmd = gw._build_whisper_cmd(
+        {"repo_id": "mlx-community/whisper-large-v3-turbo", "venv_bin": "/v/bin"}, 8134
+    )
+    assert cmd == (
+        "/v/bin/mlx-openai-server launch "
+        "--model-path mlx-community/whisper-large-v3-turbo "
+        "--model-type whisper --served-model-name whisper "
+        "--host 127.0.0.1 --port 8134"
+    )
+
+
+def test_build_whisper_cmd_bare_binary(monkeypatch):
+    monkeypatch.delenv("ODYSSEUS_MLX_VENV_BIN", raising=False)
+    cmd = gw._build_whisper_cmd({"repo_id": "x/whisper"}, 8000)
+    assert cmd.startswith("mlx-openai-server launch --model-path x/whisper --model-type whisper ")
+
+
+def test_build_serve_cmd_dispatches_on_engine():
+    # whisper engine -> mlx-openai-server; anything else -> mlx_lm.server
+    w = gw._build_serve_cmd({"repo_id": "x/whisper", "engine": "whisper"}, 8000)
+    assert "mlx-openai-server" in w and "--model-type whisper" in w
+    t = gw._build_serve_cmd({"repo_id": "x/y"}, 8000)
+    assert "mlx_lm.server" in t and "mlx-openai-server" not in t
+
+
 def test_advertised_models_includes_autoserve_when_idle(monkeypatch, tmp_path):
     """The picker must show auto-servable models even when none are loaded
     (Baton parity) — otherwise a cold gateway reports 'no models'."""

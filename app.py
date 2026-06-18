@@ -717,6 +717,11 @@ app.include_router(setup_cookbook_routes())
 from routes.mlx_gateway_routes import setup_mlx_gateway_routes
 app.include_router(setup_mlx_gateway_routes())
 
+# MLX audio: OpenAI-compatible /mlx/v1/audio/transcriptions in front of the
+# dedicated whisper serve (launchd io.odysseus.mlx-whisper). Same /mlx auth.
+from routes.mlx_audio_routes import setup_mlx_audio_routes
+app.include_router(setup_mlx_audio_routes())
+
 from routes.workspace_routes import setup_workspace_routes
 app.include_router(setup_workspace_routes())
 

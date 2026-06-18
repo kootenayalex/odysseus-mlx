@@ -78,6 +78,14 @@ external tools (OpenCode, etc.) get one endpoint instead of N per-model ports:
 - **MLX embeddings (optional)** — serve an MLX embedding model and point
   `EMBEDDING_URL` at it; see [`deploy/io.odysseus.mlx-embed.plist.example`](deploy/io.odysseus.mlx-embed.plist.example).
   Retrieval is multi-lane, so existing vectors stay searchable.
+- **MLX speech-to-text (whisper)** — an OpenAI-compatible
+  `POST /mlx/v1/audio/transcriptions` (multipart `file=`, `model=whisper`).
+  Whisper is a speech model, so it serves via `mlx-openai-server`'s whisper
+  handler through the same on-demand scheduler (admission/TTL/eviction, dynamic
+  port) — zero config: it defaults to `mlx-community/whisper-large-v3-turbo`
+  (override with `ODYSSEUS_MLX_WHISPER_REPO`, or a `whisper` entry in
+  `mlx_autoserve.json` — `pin` it to keep dictation instant). Powers a
+  push-to-talk dictation client, browser voice input, etc.
 
 Requires a Python env with [`mlx-lm`](https://github.com/ml-explore/mlx-lm)
 (and `mlx-openai-server` for embeddings). MLX features are inert on non-Apple

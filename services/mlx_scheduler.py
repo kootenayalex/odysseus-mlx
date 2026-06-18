@@ -48,8 +48,10 @@ DEFAULT_CTX = 8192
 # MLX detection
 # --------------------------------------------------------------------------- #
 def is_mlx_cmd(cmd: str | None) -> bool:
-    """True when a serve command launches the MLX backend (mlx_lm.server)."""
-    return bool(cmd) and "mlx_lm.server" in cmd
+    """True when a serve command launches an MLX backend: mlx_lm.server (text)
+    or mlx-openai-server (speech/STT — whisper — and embeddings). Both consume
+    the unified-memory budget, so both are governed by admission + eviction."""
+    return bool(cmd) and ("mlx_lm.server" in cmd or "mlx-openai-server" in cmd)
 
 
 _PORT_RE = re.compile(r"--port\s+(\d+)")
