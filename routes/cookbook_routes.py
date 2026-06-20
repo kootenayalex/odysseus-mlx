@@ -1225,7 +1225,7 @@ def setup_cookbook_routes() -> APIRouter:
         the new serve launches into freed memory.
         """
         from services import mlx_scheduler as ms
-        from src.cookbook_serve_lifecycle import evict_serve
+        from src.cookbook_serve_lifecycle import _session_alive, evict_serve
 
         footprint = req.footprint_mb or ms.estimate_footprint_mb(req.repo_id)
         budget = ms.budget_mb(detected_vram_gb=_mlx_detected_vram_gb())
@@ -1241,10 +1241,30 @@ def setup_cookbook_routes() -> APIRouter:
             )
         if plan["decision"] == "loads_after_evict":
             by_sid = {s.session_id: s for s in loaded}
+            evicted: list[str] = []
             for victim_sid in plan["evict"]:
                 victim = by_sid.get(victim_sid)
                 if victim:
                     await evict_serve(victim, reason="budget")
+                    evicted.append(victim_sid)
+            # Free-before-launch GPU barrier. evict_serve()/tmux kill-session
+            # returns the instant the session is signalled, NOT when the MLX
+            # process has actually torn down and released its Metal buffers.
+            # Launching the replacement before that teardown completes makes the
+            # new serve allocate GPU memory while the dying one is still freeing
+            # it — the concurrent alloc/free that trips the IOGPUMemory
+            # "completeMemory() prepare count underflow" kernel panic (crashed
+            # the box 2026-06-19 under deep-research model churn). So wait for
+            # each victim's tmux session to be gone, then a short settle, before
+            # we return and the caller launches into freed memory.
+            deadline = time.monotonic() + 20.0
+            for victim_sid in evicted:
+                while time.monotonic() < deadline:
+                    if not await _session_alive(victim_sid):
+                        break
+                    await asyncio.sleep(0.5)
+            if evicted:
+                await asyncio.sleep(1.5)
         serve = ms.LoadedServe(
             session_id=session_id,
             repo_id=req.repo_id,
