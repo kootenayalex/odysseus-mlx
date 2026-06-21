@@ -84,8 +84,11 @@ def setup_mlx_audio_routes() -> APIRouter:
         url = await _whisper_target(model)
 
         files = {"file": (file.filename or "audio.wav", data, file.content_type or "audio/wav")}
-        # The serve advertises its model under its served-model-name ("whisper").
-        form = {"model": "whisper", "response_format": response_format}
+        # The backend's STT model name. Legacy mlx-openai-server advertises it as
+        # "whisper" (served-model-name); Rapid-MLX's utility server expects an STT
+        # alias (e.g. "whisper-large-v3-turbo"). Configurable so both work.
+        form = {"model": os.environ.get("ODYSSEUS_MLX_WHISPER_MODEL", "whisper"),
+                "response_format": response_format}
         if language:
             form["language"] = language
 

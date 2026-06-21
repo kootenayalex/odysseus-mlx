@@ -49,6 +49,16 @@ def test_named_tag_form():
     assert '"path": "x.py"' in tcs[0]["function"]["arguments"]
 
 
+def test_doubled_opening_brace_repaired():
+    # Qwen2.5-Coder via Rapid-MLX emits a stray leading brace: `{{...}}`, which
+    # leaves the object unbalanced. The repair pass collapses it and lifts.
+    content = '{{"name": "search", "arguments": {"q": "mlx"}}'
+    tcs, cleaned = extract_tool_calls(content, NAMES)
+    assert len(tcs) == 1
+    assert tcs[0]["function"]["name"] == "search"
+    assert '"q": "mlx"' in tcs[0]["function"]["arguments"]
+
+
 def test_fenced_named_tag():
     content = "```xml\n<run_shell arguments='{\"cmd\": \"pwd\"}'/>\n```"
     tcs, cleaned = extract_tool_calls(content, NAMES)

@@ -228,13 +228,43 @@ def _pick_free_port(base: int = 8130, span: int = 60) -> int:
     raise HTTPException(status_code=503, detail="no free port for auto-serve")
 
 
-def _build_mlx_cmd(spec: dict, port: int) -> str:
-    venv_bin = spec.get("venv_bin") or os.environ.get("ODYSSEUS_MLX_VENV_BIN", "")
-    binpath = (venv_bin.rstrip("/") + "/mlx_lm.server") if venv_bin else "mlx_lm.server"
-    cmd = f"{binpath} --model {spec['repo_id']} --host 127.0.0.1 --port {port}"
-    if spec.get("trust_remote"):
-        cmd += " --trust-remote-code"
+def _rapid_mlx_bin() -> str:
+    return (os.environ.get("ODYSSEUS_RAPID_MLX_BIN", "").strip()
+            or os.path.expanduser("~/.local/bin/rapid-mlx"))
+
+
+def _build_rapid_cmd(spec: dict, port: int) -> str:
+    """Launch a text/chat model via Rapid-MLX — the OpenAI-compatible engine that
+    replaced mlx_lm.server. Native tool-calling + prefix cache. Thinking is OFF by
+    default so `message.content` is populated for extraction/tool consumers (a
+    thinking model otherwise spends the budget in `reasoning_content` and returns
+    empty content — broke deep research). Per-model overrides via autoserve fields:
+    `tool_call_parser` (default "auto"; set e.g. "qwen3" if auto misfires),
+    `thinking` (default false), `rapid_extra` (raw extra flags)."""
+    repo = spec["repo_id"]
+    cmd = (f"{_rapid_mlx_bin()} serve {repo} "
+           f"--served-model-name {repo} --host 127.0.0.1 --port {port} "
+           f"--enable-prefix-cache")
+    parser = spec.get("tool_call_parser", "auto")
+    if parser:
+        cmd += f" --enable-auto-tool-choice --tool-call-parser {parser}"
+    if not spec.get("thinking"):
+        cmd += " --no-thinking"
+    if spec.get("rapid_extra"):
+        cmd += f" {spec['rapid_extra']}"
     return cmd
+
+
+def _build_mlx_cmd(spec: dict, port: int) -> str:
+    # Rollback toggle: ODYSSEUS_MLX_ENGINE=mlxlm restores the legacy mlx_lm.server.
+    if os.environ.get("ODYSSEUS_MLX_ENGINE", "rapid").strip().lower() == "mlxlm":
+        venv_bin = spec.get("venv_bin") or os.environ.get("ODYSSEUS_MLX_VENV_BIN", "")
+        binpath = (venv_bin.rstrip("/") + "/mlx_lm.server") if venv_bin else "mlx_lm.server"
+        cmd = f"{binpath} --model {spec['repo_id']} --host 127.0.0.1 --port {port}"
+        if spec.get("trust_remote"):
+            cmd += " --trust-remote-code"
+        return cmd
+    return _build_rapid_cmd(spec, port)
 
 
 # ── Whisper / STT engine ──────────────────────────────────────────────────────

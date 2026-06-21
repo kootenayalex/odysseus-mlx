@@ -143,21 +143,38 @@ def test_autoserve_config_missing_file(monkeypatch, tmp_path):
     assert gw._autoserve_config() == {}
 
 
-def test_build_mlx_cmd_with_venv_and_trust():
+def test_build_mlx_cmd_rapid_default(monkeypatch):
+    # Default engine is Rapid-MLX: positional model, served-name = repo_id,
+    # native tool-calling (auto parser), prefix cache, thinking off.
+    monkeypatch.delenv("ODYSSEUS_MLX_ENGINE", raising=False)
+    monkeypatch.setenv("ODYSSEUS_RAPID_MLX_BIN", "/r/rapid-mlx")
+    cmd = gw._build_mlx_cmd({"repo_id": "x/y"}, 8000)
+    assert cmd.startswith("/r/rapid-mlx serve x/y --served-model-name x/y --host 127.0.0.1 --port 8000")
+    assert "--enable-prefix-cache" in cmd
+    assert "--enable-auto-tool-choice --tool-call-parser auto" in cmd
+    assert "--no-thinking" in cmd
+
+
+def test_build_mlx_cmd_rapid_parser_and_thinking(monkeypatch):
+    monkeypatch.delenv("ODYSSEUS_MLX_ENGINE", raising=False)
+    monkeypatch.setenv("ODYSSEUS_RAPID_MLX_BIN", "/r/rapid-mlx")
+    cmd = gw._build_mlx_cmd({"repo_id": "x/y", "tool_call_parser": "qwen3", "thinking": True}, 8000)
+    assert "--tool-call-parser qwen3" in cmd
+    assert "--no-thinking" not in cmd
+
+
+def test_build_mlx_cmd_mlxlm_rollback(monkeypatch):
+    # ODYSSEUS_MLX_ENGINE=mlxlm restores the legacy mlx_lm.server command.
+    monkeypatch.setenv("ODYSSEUS_MLX_ENGINE", "mlxlm")
     cmd = gw._build_mlx_cmd({"repo_id": "x/y", "venv_bin": "/v/bin", "trust_remote": True}, 8131)
     assert cmd == "/v/bin/mlx_lm.server --model x/y --host 127.0.0.1 --port 8131 --trust-remote-code"
 
 
-def test_build_mlx_cmd_bare_binary(monkeypatch):
+def test_build_mlx_cmd_mlxlm_bare_binary(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_MLX_ENGINE", "mlxlm")
     monkeypatch.delenv("ODYSSEUS_MLX_VENV_BIN", raising=False)
     cmd = gw._build_mlx_cmd({"repo_id": "x/y"}, 8000)
     assert cmd == "mlx_lm.server --model x/y --host 127.0.0.1 --port 8000"
-
-
-def test_build_mlx_cmd_env_venv(monkeypatch):
-    monkeypatch.setenv("ODYSSEUS_MLX_VENV_BIN", "/env/bin")
-    cmd = gw._build_mlx_cmd({"repo_id": "x/y"}, 8000)
-    assert cmd.startswith("/env/bin/mlx_lm.server ")
 
 
 # --- whisper / STT engine ------------------------------------------------- #
@@ -194,12 +211,13 @@ def test_build_whisper_cmd_bare_binary(monkeypatch):
     assert cmd.startswith("mlx-openai-server launch --model-path x/whisper --model-type whisper ")
 
 
-def test_build_serve_cmd_dispatches_on_engine():
-    # whisper engine -> mlx-openai-server; anything else -> mlx_lm.server
+def test_build_serve_cmd_dispatches_on_engine(monkeypatch):
+    # whisper engine -> mlx-openai-server; anything else -> Rapid-MLX (default engine)
+    monkeypatch.delenv("ODYSSEUS_MLX_ENGINE", raising=False)
     w = gw._build_serve_cmd({"repo_id": "x/whisper", "engine": "whisper"}, 8000)
     assert "mlx-openai-server" in w and "--model-type whisper" in w
     t = gw._build_serve_cmd({"repo_id": "x/y"}, 8000)
-    assert "mlx_lm.server" in t and "mlx-openai-server" not in t
+    assert "rapid-mlx serve" in t and "mlx-openai-server" not in t
 
 
 def test_advertised_models_includes_autoserve_when_idle(monkeypatch, tmp_path):

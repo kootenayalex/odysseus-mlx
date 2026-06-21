@@ -117,6 +117,19 @@ def extract_tool_calls(content: str, names=None):
                 tcs.append(_mk_tc(d["name"], d.get("arguments", d.get("parameters", {}))))
                 residue = residue.replace(o, "")
         residue = _TOOLS_TAG_RE.sub("", residue)
+    if not tcs:                                    # repair: doubled opening brace
+        # Some quants (e.g. Qwen2.5-Coder via Rapid-MLX) emit `{{"name": ...}}` —
+        # a stray leading `{` leaves the object unbalanced so _json_objects finds
+        # nothing. Collapse a leading run of extra `{` and retry once.
+        scan = _THINK_RE.sub("", content)
+        repaired = re.sub(r"^(\s*)\{(\s*\{)", r"\1\2", scan)
+        if repaired != scan:
+            for o in _json_objects(repaired):
+                d = _try_json(o)
+                if isinstance(d, dict) and "name" in d and (not names or d["name"] in names):
+                    tcs.append(_mk_tc(d["name"], d.get("arguments", d.get("parameters", {}))))
+            if tcs:
+                residue = ""
     if not tcs:
         return [], content
     cleaned = _THINK_RE.sub("", residue).strip().strip("`").strip()
