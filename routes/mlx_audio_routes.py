@@ -102,8 +102,10 @@ def setup_mlx_audio_routes() -> APIRouter:
         if r.status_code != 200:
             raise HTTPException(status_code=r.status_code, detail=r.text)
 
-        # The serve returns JSON ({"text": ...}) regardless of response_format,
-        # so normalize: response_format=text → the bare transcript, else JSON.
+        # Normalize the serve's response to a bare transcript in text mode.
+        # The rapid-mlx whisper serve returns {"text": ...} for json mode but a
+        # JSON-quoted string ("...") for text mode — r.json() decodes the latter
+        # to a bare str, so return that (NOT r.text, which still has the quotes).
         try:
             payload = r.json()
         except ValueError:
@@ -111,6 +113,8 @@ def setup_mlx_audio_routes() -> APIRouter:
         if response_format == "text":
             if isinstance(payload, dict) and "text" in payload:
                 return PlainTextResponse(payload["text"])
+            if isinstance(payload, str):
+                return PlainTextResponse(payload)
             return PlainTextResponse(r.text)
         if payload is not None:
             return JSONResponse(payload)
