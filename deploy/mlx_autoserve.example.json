@@ -1,16 +1,22 @@
 {
-  "_comment": "Copy to <ODYSSEUS_DATA_DIR>/mlx_autoserve.json. Maps a gateway model name to an MLX model the gateway auto-serves on first request. 'venv_bin' is the bin/ dir of a venv with mlx-lm (and mlx-openai-server for whisper) installed; omit to use the binaries from PATH. Optional: ctx, priority (higher survives eviction), pin (bool, never evicted), trust_remote (bool), footprint_mb (override the memory estimate). 'engine' selects the backend: omit/'mlx_lm' = text via mlx_lm.server (default), 'whisper' = speech-to-text via mlx-openai-server (served at /mlx/v1/audio/transcriptions). A bare string value is treated as the repo_id. Note: whisper also auto-serves with NO entry here (defaults to mlx-community/whisper-large-v3-turbo); add it only to override the model or pin it warm.",
+  "_comment": "Copy to <ODYSSEUS_DATA_DIR>/mlx_autoserve.json. Maps a gateway model name to an MLX model the gateway auto-serves (via Rapid-MLX) on first request. Optional per-entry fields: tool_call_parser (Rapid-MLX tool parser; e.g. 'qwen3' for Qwen, 'hermes' for Llama, 'auto' to auto-detect — needed because the gateway passes a raw repo_id Rapid-MLX can't profile), thinking (bool, default false = pass --no-thinking so message.content is populated), ctx, priority (higher survives eviction), pin (bool, never evicted), footprint_mb (override the memory estimate), rapid_extra (raw extra flags). Cloud escalation (see docs/cloud-escalation.md): cloud_model (litellm string), cloud_api_base, cloud_threshold, cloud_api_key_env (env var holding the key). Rollback: set ODYSSEUS_MLX_ENGINE=mlxlm to use the legacy mlx_lm.server (then 'venv_bin'/'trust_remote' apply). A bare string value is treated as the repo_id. Whisper STT + embeddings are NOT autoserve entries anymore — they run on the standing utility server (see io.odysseus.rapid-util.plist.example).",
   "coder": {
     "repo_id": "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
-    "venv_bin": "/path/to/odysseus/.venv-mlx/bin",
+    "tool_call_parser": "qwen3",
     "priority": 7
   },
-  "chat": "Qwen/Qwen3-14B-MLX-4bit",
-  "whisper": {
-    "repo_id": "mlx-community/whisper-large-v3-turbo",
-    "venv_bin": "/path/to/odysseus/.venv-mlx/bin",
-    "engine": "whisper",
-    "footprint_mb": 1800,
-    "pin": true
+  "chat": {
+    "repo_id": "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
+    "tool_call_parser": "hermes",
+    "priority": 6
+  },
+  "_escalate_example": {
+    "_note": "Local-first with cloud fallback for hard/long tasks. Put cloud_* ONLY on a non-sensitive serve (research/escalate) — never on email/utility models — so personal data stays local. Set the key in .env under the name below, then restart.",
+    "repo_id": "Qwen/Qwen3-14B-MLX-4bit",
+    "tool_call_parser": "qwen3",
+    "cloud_model": "anthropic/claude-sonnet-4-5-20250929",
+    "cloud_threshold": 20000,
+    "cloud_api_key_env": "ANTHROPIC_API_KEY",
+    "priority": 5
   }
 }

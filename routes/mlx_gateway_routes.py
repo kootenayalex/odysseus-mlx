@@ -155,7 +155,7 @@ def _autoserve_config() -> dict:
 _MLX_NON_CHAT_RE = re.compile(
     r"embed|bge|minilm|e5-|gte-|"          # embeddings
     r"voxcpm|cosyvoice|parler|\btts\b|"    # TTS
-    r"whisper|\bstt\b|\basr\b|"            # STT
+    r"whisper|parakeet|\bstt\b|\basr\b|"  # STT
     r"triposr|\b3d\b|"                     # 3D
     r"-vl-|\bvl\b|qwen[\d.]*-?vl",         # vision / VL multimodal
     re.IGNORECASE,
@@ -228,13 +228,65 @@ def _pick_free_port(base: int = 8130, span: int = 60) -> int:
     raise HTTPException(status_code=503, detail="no free port for auto-serve")
 
 
-def _build_mlx_cmd(spec: dict, port: int) -> str:
-    venv_bin = spec.get("venv_bin") or os.environ.get("ODYSSEUS_MLX_VENV_BIN", "")
-    binpath = (venv_bin.rstrip("/") + "/mlx_lm.server") if venv_bin else "mlx_lm.server"
-    cmd = f"{binpath} --model {spec['repo_id']} --host 127.0.0.1 --port {port}"
-    if spec.get("trust_remote"):
-        cmd += " --trust-remote-code"
+def _rapid_mlx_bin() -> str:
+    return (os.environ.get("ODYSSEUS_RAPID_MLX_BIN", "").strip()
+            or os.path.expanduser("~/.local/bin/rapid-mlx"))
+
+
+def _build_rapid_cmd(spec: dict, port: int) -> str:
+    """Launch a text/chat model via Rapid-MLX — the OpenAI-compatible engine that
+    replaced mlx_lm.server. Native tool-calling + prefix cache. Thinking is OFF by
+    default so `message.content` is populated for extraction/tool consumers (a
+    thinking model otherwise spends the budget in `reasoning_content` and returns
+    empty content — broke deep research). Per-model overrides via autoserve fields:
+    `tool_call_parser` (default "auto"; set e.g. "qwen3" if auto misfires),
+    `thinking` (default false), `rapid_extra` (raw extra flags)."""
+    repo = spec["repo_id"]
+    cmd = (f"{_rapid_mlx_bin()} serve {repo} "
+           f"--served-model-name {repo} --host 127.0.0.1 --port {port} "
+           f"--enable-prefix-cache")
+    parser = spec.get("tool_call_parser", "auto")
+    if parser:
+        cmd += f" --enable-auto-tool-choice --tool-call-parser {parser}"
+    if not spec.get("thinking"):
+        cmd += " --no-thinking"
+    # Cloud escalation (Track C — provider-agnostic, local-first). When a spec
+    # sets `cloud_model` (a litellm string, e.g. "anthropic/claude-sonnet-4-5"
+    # or "openai/gpt-4o"), Rapid-MLX routes requests larger than `cloud_threshold`
+    # new tokens to that provider; everything smaller stays local. The provider
+    # is a config value (swap `cloud_api_base`/`cloud_model` to change vendors —
+    # this is the hedge against the Anthropic MAX→API-key billing flip). The key
+    # is read from the env var named by `cloud_api_key_env` (kept in .env, never
+    # in autoserve.json); it lands on the serve command line, so on a shared host
+    # prefer setting the litellm provider env var on the serve instead.
+    # SENSITIVITY GATE: only put `cloud_model` on serves used for non-sensitive
+    # work (e.g. a dedicated "escalate"/research model). Email/utility models omit
+    # it, so personal mail is never sent off-box.
+    if spec.get("cloud_model"):
+        cmd += f" --cloud-model {spec['cloud_model']}"
+        if spec.get("cloud_api_base"):
+            cmd += f" --cloud-api-base {spec['cloud_api_base']}"
+        if spec.get("cloud_threshold") is not None:
+            cmd += f" --cloud-threshold {spec['cloud_threshold']}"
+        key_env = spec.get("cloud_api_key_env", "")
+        key = os.environ.get(key_env, "").strip() if key_env else ""
+        if key:
+            cmd += f" --cloud-api-key {key}"
+    if spec.get("rapid_extra"):
+        cmd += f" {spec['rapid_extra']}"
     return cmd
+
+
+def _build_mlx_cmd(spec: dict, port: int) -> str:
+    # Rollback toggle: ODYSSEUS_MLX_ENGINE=mlxlm restores the legacy mlx_lm.server.
+    if os.environ.get("ODYSSEUS_MLX_ENGINE", "rapid").strip().lower() == "mlxlm":
+        venv_bin = spec.get("venv_bin") or os.environ.get("ODYSSEUS_MLX_VENV_BIN", "")
+        binpath = (venv_bin.rstrip("/") + "/mlx_lm.server") if venv_bin else "mlx_lm.server"
+        cmd = f"{binpath} --model {spec['repo_id']} --host 127.0.0.1 --port {port}"
+        if spec.get("trust_remote"):
+            cmd += " --trust-remote-code"
+        return cmd
+    return _build_rapid_cmd(spec, port)
 
 
 # ── Whisper / STT engine ──────────────────────────────────────────────────────

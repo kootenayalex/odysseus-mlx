@@ -569,7 +569,8 @@ def _bash_squote(v: str) -> str:
 _SERVE_CMD_ALLOWLIST = {
     "vllm", "llama-server", "llama_server", "llama.cpp", "ollama",
     "python", "python3",
-    "mlx_lm.server",            # Apple Silicon MLX serving (mlx-lm console script)
+    "rapid-mlx",                # Apple Silicon MLX serving (replaced mlx_lm.server)
+    "mlx_lm.server",            # legacy mlx-lm console script (rollback engine)
     "mlx-openai-server",        # MLX serving for speech/STT (whisper) & embeddings
     "sglang", "lmdeploy",
     "node", "npx",
