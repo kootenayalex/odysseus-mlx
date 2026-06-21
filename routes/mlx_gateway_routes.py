@@ -250,6 +250,28 @@ def _build_rapid_cmd(spec: dict, port: int) -> str:
         cmd += f" --enable-auto-tool-choice --tool-call-parser {parser}"
     if not spec.get("thinking"):
         cmd += " --no-thinking"
+    # Cloud escalation (Track C — provider-agnostic, local-first). When a spec
+    # sets `cloud_model` (a litellm string, e.g. "anthropic/claude-sonnet-4-5"
+    # or "openai/gpt-4o"), Rapid-MLX routes requests larger than `cloud_threshold`
+    # new tokens to that provider; everything smaller stays local. The provider
+    # is a config value (swap `cloud_api_base`/`cloud_model` to change vendors —
+    # this is the hedge against the Anthropic MAX→API-key billing flip). The key
+    # is read from the env var named by `cloud_api_key_env` (kept in .env, never
+    # in autoserve.json); it lands on the serve command line, so on a shared host
+    # prefer setting the litellm provider env var on the serve instead.
+    # SENSITIVITY GATE: only put `cloud_model` on serves used for non-sensitive
+    # work (e.g. a dedicated "escalate"/research model). Email/utility models omit
+    # it, so personal mail is never sent off-box.
+    if spec.get("cloud_model"):
+        cmd += f" --cloud-model {spec['cloud_model']}"
+        if spec.get("cloud_api_base"):
+            cmd += f" --cloud-api-base {spec['cloud_api_base']}"
+        if spec.get("cloud_threshold") is not None:
+            cmd += f" --cloud-threshold {spec['cloud_threshold']}"
+        key_env = spec.get("cloud_api_key_env", "")
+        key = os.environ.get(key_env, "").strip() if key_env else ""
+        if key:
+            cmd += f" --cloud-api-key {key}"
     if spec.get("rapid_extra"):
         cmd += f" {spec['rapid_extra']}"
     return cmd

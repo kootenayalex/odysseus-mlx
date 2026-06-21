@@ -177,6 +177,47 @@ def test_build_mlx_cmd_mlxlm_bare_binary(monkeypatch):
     assert cmd == "mlx_lm.server --model x/y --host 127.0.0.1 --port 8000"
 
 
+def test_build_mlx_cmd_no_cloud_by_default(monkeypatch):
+    # Sensitivity gate: a serve without cloud_model never escalates.
+    monkeypatch.delenv("ODYSSEUS_MLX_ENGINE", raising=False)
+    monkeypatch.setenv("ODYSSEUS_RAPID_MLX_BIN", "/r/rapid-mlx")
+    cmd = gw._build_mlx_cmd({"repo_id": "x/y"}, 8000)
+    assert "--cloud-model" not in cmd
+
+
+def test_build_mlx_cmd_cloud_escalation(monkeypatch):
+    # Provider-agnostic cloud routing: litellm model + base + threshold; the key
+    # comes from the env var named by cloud_api_key_env (kept out of the spec).
+    monkeypatch.delenv("ODYSSEUS_MLX_ENGINE", raising=False)
+    monkeypatch.setenv("ODYSSEUS_RAPID_MLX_BIN", "/r/rapid-mlx")
+    monkeypatch.setenv("MY_CLOUD_KEY", "sk-secret")
+    spec = {
+        "repo_id": "x/y",
+        "cloud_model": "anthropic/claude-sonnet-4-5",
+        "cloud_api_base": "https://api.example.com/v1",
+        "cloud_threshold": 20000,
+        "cloud_api_key_env": "MY_CLOUD_KEY",
+    }
+    cmd = gw._build_mlx_cmd(spec, 8000)
+    assert "--cloud-model anthropic/claude-sonnet-4-5" in cmd
+    assert "--cloud-api-base https://api.example.com/v1" in cmd
+    assert "--cloud-threshold 20000" in cmd
+    assert "--cloud-api-key sk-secret" in cmd
+
+
+def test_build_mlx_cmd_cloud_without_key_env(monkeypatch):
+    # cloud_model set but the key env var is unset → no --cloud-api-key emitted
+    # (rapid-mlx can still read a litellm provider env var on the serve).
+    monkeypatch.delenv("ODYSSEUS_MLX_ENGINE", raising=False)
+    monkeypatch.setenv("ODYSSEUS_RAPID_MLX_BIN", "/r/rapid-mlx")
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    cmd = gw._build_mlx_cmd(
+        {"repo_id": "x/y", "cloud_model": "openai/gpt-4o", "cloud_api_key_env": "MISSING_KEY"}, 8000
+    )
+    assert "--cloud-model openai/gpt-4o" in cmd
+    assert "--cloud-api-key" not in cmd
+
+
 # --- whisper / STT engine ------------------------------------------------- #
 def test_is_whisper_name():
     assert gw._is_whisper_name("whisper")
