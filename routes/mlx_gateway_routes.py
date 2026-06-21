@@ -155,7 +155,7 @@ def _autoserve_config() -> dict:
 _MLX_NON_CHAT_RE = re.compile(
     r"embed|bge|minilm|e5-|gte-|"          # embeddings
     r"voxcpm|cosyvoice|parler|\btts\b|"    # TTS
-    r"whisper|\bstt\b|\basr\b|"            # STT
+    r"whisper|parakeet|\bstt\b|\basr\b|"  # STT
     r"triposr|\b3d\b|"                     # 3D
     r"-vl-|\bvl\b|qwen[\d.]*-?vl",         # vision / VL multimodal
     re.IGNORECASE,
