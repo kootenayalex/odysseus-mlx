@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.odysseus.rapid-util</string>
+
+    <!-- Standing Rapid-MLX utility server: embeddings (all-MiniLM, RAG-compatible)
+         + Whisper STT on demand, on :8133. Replaces io.odysseus.mlx-embed and the
+         scheduler-managed whisper serve. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/alex/vault/dev/odysseus/scripts/rapid_util_server.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/alex/vault/dev/odysseus</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/alex</string>
+        <key>PATH</key>
+        <string>/Users/alex/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>EMBEDDING_MODEL</key>
+        <string>mlx-community/all-MiniLM-L6-v2-4bit</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/alex/vault/dev/odysseus/logs/rapid-util.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alex/vault/dev/odysseus/logs/rapid-util.err.log</string>
+</dict>
+</plist>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.odysseus.watchdog</string>
+
+    <!-- Health watchdog: probes the gateway (:7860) + utility server (:8133)
+         every 120s and recovers a hung-but-alive service (threshold + cooldown
+         guarded). One cycle per run; state in data/watchdog_state.json. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alex/vault/dev/odysseus/venv/bin/python</string>
+        <string>/Users/alex/vault/dev/odysseus/scripts/mlx_watchdog.py</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>120</integer>
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/alex/vault/dev/odysseus</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/alex</string>
+        <key>PATH</key>
+        <string>/bin:/usr/bin:/sbin:/usr/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/alex/vault/dev/odysseus/logs/watchdog.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alex/vault/dev/odysseus/logs/watchdog.err.log</string>
+</dict>
+</plist>
