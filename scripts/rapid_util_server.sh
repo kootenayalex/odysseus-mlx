@@ -16,7 +16,12 @@ PORT="${ODYSSEUS_RAPID_UTIL_PORT:-8133}"
 # Ensure the Whisper repo has the processor files mlx-audio needs (idempotent).
 "$RAPID_PY" "$(dirname "$0")/rapid_whisper_fixup.py" || true
 
+# rapid-mlx >=0.9.x gates the audio/transcription lane behind an explicit
+# opt-in on a text-mode boot (Task #292: enable_audio_lane OR
+# is_audio_name(model_name)) -- our HOST_MODEL is a chat model, not an
+# audio-named alias, so --enable-audio is required for /v1/audio/transcriptions
+# (Whisper) to mount at all. Without it the server only serves $EMBED_MODEL.
 exec "$RAPID_BIN" serve "$HOST_MODEL" \
   --served-model-name util --host 127.0.0.1 --port "$PORT" \
-  --embedding-model "$EMBED_MODEL" \
+  --embedding-model "$EMBED_MODEL" --enable-audio \
   --no-thinking --log-level WARNING
