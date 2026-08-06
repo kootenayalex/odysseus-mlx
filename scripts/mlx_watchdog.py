@@ -38,10 +38,12 @@ COOLDOWN_S = int(os.environ.get("ODYSSEUS_WD_COOLDOWN_S", "600"))
 TIMEOUT_S = float(os.environ.get("ODYSSEUS_WD_TIMEOUT_S", "6"))
 PUSH_URL = os.environ.get("ODYSSEUS_WD_PUSH_URL", "").strip()
 
-TARGETS = [
-    {"label": "io.odysseus.server", "url": "http://127.0.0.1:7860/api/health"},
-    {"label": "io.odysseus.rapid-util", "url": "http://127.0.0.1:8133/v1/models"},
-]
+# Both original targets are retired: io.odysseus.server (:7860 gateway) on
+# 2026-08-01 in favour of LM Studio :1234, and io.odysseus.rapid-util (:8133)
+# on 2026-08-06 — dictation moved to the on-demand whisper.cpp sidecar (:8786)
+# and embeddings to LM Studio. Nothing left to watch; re-enabling the watchdog
+# with these labels would restart-loop services that no longer exist.
+TARGETS: list[dict[str, str]] = []
 
 
 def log(msg: str) -> None:
