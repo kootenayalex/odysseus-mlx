@@ -72,6 +72,116 @@ def model_from_cmd(cmd: str | None) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
+# Process reality (OS scan)
+# --------------------------------------------------------------------------- #
+# The registry is *bookkeeping*; these functions observe the actual OS. Local
+# serves are launched detached, so they can outlive their tmux session — which
+# means the tmux name is NOT a reliable liveness/kill handle. The pid bound to a
+# serve's unique `--port` is. Used by the lifecycle reaper for port-authoritative
+# liveness, precise kills, and the boot/periodic orphan sweep that reclaims
+# serves the registry lost track of (e.g. after a server restart).
+
+# Externally-managed serves the reaper must NEVER touch. The launchd
+# `io.odysseus.rapid-util` server runs a rapid-mlx serve in the same 813x port
+# range as autoserve, so port range alone can't distinguish it — match its
+# distinctive signature instead (util/embedding server, launched via the wrapper
+# script). Extend this tuple if other supervised serves are added.
+_PROTECTED_CMD_MARKERS = (
+    "rapid_util_server.sh",
+    "--served-model-name util",
+    "all-MiniLM",              # the util server's embedding model
+)
+
+
+def is_protected_cmd(cmd: str | None) -> bool:
+    """True for externally-supervised serves (e.g. the launchd rapid-util
+    embedding server) that the reaper must never evict or kill."""
+    c = cmd or ""
+    return any(marker in c for marker in _PROTECTED_CMD_MARKERS)
+
+
+def discover_local_mlx_procs() -> list[dict]:
+    """Scan the OS for live *local* MLX serve processes.
+
+    Returns ``[{"pid": int, "port": int|None, "age_s": int, "cmd": str}]`` for
+    every running process whose command line launches an MLX backend. Stdlib
+    only (``ps``), matching this codebase's no-psutil constraint. Best-effort:
+    returns ``[]`` on any scan failure so a probe error never breaks a caller.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,etime=,command="],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except Exception:
+        return []
+    procs: list[dict] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid_s, etime_s, cmd = parts
+        if not is_mlx_cmd(cmd):
+            continue
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        procs.append({
+            "pid": pid,
+            "port": port_from_cmd(cmd),
+            "age_s": _etime_to_seconds(etime_s),
+            "cmd": cmd,
+        })
+    return procs
+
+
+def local_serve_pid(port: int | None) -> int | None:
+    """PID of the live local MLX serve bound to ``port``, or None. The
+    authoritative liveness/kill handle for a local serve."""
+    if not port:
+        return None
+    for p in discover_local_mlx_procs():
+        if p["port"] == port:
+            return p["pid"]
+    return None
+
+
+def _etime_to_seconds(etime: str) -> int:
+    """Parse ``ps`` elapsed-time ``[[dd-]hh:]mm:ss`` into seconds. 0 on any
+    parse failure (treats an unknown-age process as brand-new, i.e. protected
+    by the orphan-sweep grace window rather than eagerly killed)."""
+    etime = (etime or "").strip()
+    if not etime:
+        return 0
+    days = 0
+    if "-" in etime:
+        d, _, etime = etime.partition("-")
+        try:
+            days = int(d)
+        except ValueError:
+            days = 0
+    bits = etime.split(":")
+    try:
+        nums = [int(b) for b in bits]
+    except ValueError:
+        return 0
+    if len(nums) == 3:
+        h, m, s = nums
+    elif len(nums) == 2:
+        h = 0
+        m, s = nums
+    else:
+        return 0
+    return days * 86400 + h * 3600 + m * 60 + s
+
+
+# --------------------------------------------------------------------------- #
 # Footprint estimation
 # --------------------------------------------------------------------------- #
 def quant_from_name(name: str | None) -> str:
@@ -168,6 +278,11 @@ class LoadedServe:
     session_id: str
     repo_id: str = ""
     port: int | None = None
+    # OS pid of the actual serve process (best-effort, resolved from `port` at
+    # register time). Local serves are launched *detached* (start_new_session),
+    # so they outlive their tmux session — the pid/port is the only authoritative
+    # handle for liveness + kill. Never rely on the tmux session alone.
+    pid: int | None = None
     footprint_mb: int = 0
     priority: int = DEFAULT_PRIORITY
     pinned: bool = False
@@ -184,6 +299,7 @@ class LoadedServe:
             session_id=rec.get("session_id") or rec.get("sessionId") or "",
             repo_id=rec.get("repo_id", ""),
             port=rec.get("port"),
+            pid=rec.get("pid"),
             footprint_mb=int(rec.get("footprint_mb") or 0),
             priority=int(rec.get("priority", DEFAULT_PRIORITY)),
             pinned=bool(rec.get("pinned", False)),
@@ -200,6 +316,7 @@ class LoadedServe:
             "session_id": self.session_id,
             "repo_id": self.repo_id,
             "port": self.port,
+            "pid": self.pid,
             "footprint_mb": self.footprint_mb,
             "priority": self.priority,
             "pinned": self.pinned,

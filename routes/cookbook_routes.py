@@ -1730,6 +1730,13 @@ def setup_cookbook_routes() -> APIRouter:
                 from services import mlx_scheduler as ms
                 _mlx_serve.endpoint_id = endpoint_id
                 _mlx_serve.port = _mlx_serve.port or ms.port_from_cmd(req.cmd)
+                # Record the OS pid so liveness/kill can be authoritative on the
+                # detached process, not the tmux session it outlives. Best-effort:
+                # the port may not be bound yet this early (large models load
+                # slowly) — the reaper's kill/liveness paths fall back to a live
+                # port lookup, so a null pid here is harmless.
+                if not _mlx_serve.remote_host and not _mlx_serve.pid:
+                    _mlx_serve.pid = ms.local_serve_pid(_mlx_serve.port)
                 _mlx_serve.last_used_ms = int(time.time() * 1000)
                 ms.register_serve(_mlx_serve)
             except Exception as e:
